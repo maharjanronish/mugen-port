@@ -20,7 +20,7 @@ void mg_logf(const char *fmt, ...) {
 }
 #endif
 
-#define MG_PORT_VERSION "0.2.0"
+#define MG_PORT_VERSION "0.2.1"
 
 static SDL_Window *g_win = NULL;
 static SDL_Renderer *g_ren = NULL;
@@ -172,10 +172,14 @@ static SDL_Texture *spr_texture(MgSprite *spr) {
         memmove(g_texcache, g_texcache + TEXCACHE_MAX/2, sizeof(TexCache) * TEXCACHE_MAX/2);
         g_ntexcache -= TEXCACHE_MAX/2;
     }
-    SDL_Texture *tex = SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_ABGR8888,
+    SDL_Texture *tex = SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_RGBA8888,
                                          SDL_TEXTUREACCESS_STATIC, spr->w, spr->h);
     if (!tex) return NULL;
-    /* our RGBA is r<<24|g<<16|b<<8|a = ABGR8888 little-endian */
+    /* our RGBA is r<<24|g<<16|b<<8|a — as a 32-bit value that is exactly
+     * SDL_PIXELFORMAT_RGBA8888 (R in the MSB, A in the LSB). ABGR8888 was
+     * wrong: it pulled R from the LOW byte, so every sprite rendered with
+     * the alpha byte as red and green/blue swapped ("corrupted red/green"
+     * colors on device). Verified via render round-trip in the e2e test. */
     SDL_UpdateTexture(tex, NULL, spr->rgba, spr->w * 4);
     SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
     g_texcache[g_ntexcache].spr = spr;
@@ -422,6 +426,30 @@ static void handle_touch(SDL_Event *e) {
                 g_fingers[f].btn_idx = -1;
                 g_fingers[f].fid = 0;
             }
+        }
+    } else if (e->type == SDL_FINGERMOTION) {
+        /* v0.2.1: thumb sliding. Without this a finger that landed on the
+         * d-pad kept its ORIGINAL direction until lifted — sliding between
+         * directions (the normal way people hold a d-pad) did nothing, which
+         * felt like "the buttons don't work". Now a tracked finger re-picks
+         * its button as it moves: sliding off a button releases it, sliding
+         * onto another presses that one. */
+        for (int f = 0; f < 16; f++) {
+            if (g_fingers[f].btn_idx < 0 || g_fingers[f].fid != e->tfinger.fingerId)
+                continue;
+            int cur = g_fingers[f].btn_idx;
+            int hit = pick_button(x, y);
+            if (hit != cur) {
+                g_touchbuttons &= ~g_touchbtns[cur].bit;
+                if (hit >= 0) {
+                    g_touchbuttons |= g_touchbtns[hit].bit;
+                    g_fingers[f].btn_idx = hit;
+                } else {
+                    g_fingers[f].btn_idx = -1;
+                    g_fingers[f].fid = 0;
+                }
+            }
+            break;   /* one slot per finger */
         }
     }
 }
@@ -738,7 +766,7 @@ static void poll_events(void) {
                 else g_keybuttons[0] &= ~mask;
             }
         }
-        else if (e.type == SDL_FINGERDOWN || e.type == SDL_FINGERUP) {
+        else if (e.type == SDL_FINGERDOWN || e.type == SDL_FINGERUP || e.type == SDL_FINGERMOTION) {
             if (g_picker_on) {
                 if (e.type == SDL_FINGERDOWN) {
                     int x, y;

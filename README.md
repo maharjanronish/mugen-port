@@ -11,25 +11,48 @@ directly on Android via SDL2.
 - Gradle-free build (ndk-build + aapt2/d8/apksigner), fully scriptable
 - LAN / Wi-Fi-hotspot netplay scaffolded (`engine/net.c`, experimental)
 
-Current release: **v0.2.0** (`releases/MUGEN-v0.2.0.apk`, ~4.7 MB) — playable fight MVP + custom data folders.
+Current release: **v0.2.1** (`releases/MUGEN-v0.2.1.apk`, ~4.7 MB) — the fight actually
+works: colors are correct, moves end, walking/hits/KO rounds all function.
 
-**v0.2.0** fixes the broken fight scene of v0.1.x on real devices (characters were
-tiny and piled in the top-left corner because `world_scale` was never initialized;
-stage backgrounds never rendered because `spriteno`/`start`/`spr` were not parsed),
-adds correct MUGEN localcoord handling so HD characters (e.g. Kung Fu Man 720) are
-scaled, positioned and hit like on PC, makes every virtual button press register
-as its own move (nearest-button hit-testing + no more duplicated touch/mouse
-events), and adds an **in-game data folder picker** — choose any folder on your
-device as the MUGEN data root.
+**v0.2.1** fixes 15 engine bugs found by a new end-to-end test harness that drives
+the REAL SDL event loop (the old PC tests bypassed the platform layer entirely,
+which is why v0.2.0 looked green while broken on device):
 
-v0.1.2 fixed a path-join bug that showed "GAME DATA MISSING" on some devices.
-v0.1.1 fixed the black-screen-on-launch bug of v0.1.0 (game data was packaged
-outside `assets/`), forced landscape orientation, and added a visible loading
-screen + error screen.
+- **Corrupted red/green graphics** — sprites were uploaded with the wrong SDL
+  pixel format (`ABGR8888` instead of `RGBA8888`), scrambling channels and
+  leaking red into transparency.
+- **Moves never ended / "continuous punching"** — the animation loop wrapped
+  `anim_time` before the `AnimTime = 0` tick was ever observable, so every
+  character froze inside its first attack state forever.
+- **No hits ever connected** — Clsn boxes authored with reversed corners
+  (KFM's head box is `24,-324,-28,-384`) poisoned the collision union, and the
+  hitflag/guardflag checker compared uppercase against lowercased characters so
+  no hit or guard could ever match.
+- **Nobody could walk** — ground friction was applied before position
+  integration and then threshold-stopped in the same tick; the threshold was
+  also compared in char-local units against world-unit velocity (HD characters
+  stopped instantly).
+- **Left-facing characters moonwalked** — MUGEN VelSet/VelAdd/PosAdd X
+  parameters are facing-relative; the engine treated them as absolute.
+- **Jump attacks fell through the floor forever** — there was no engine-side
+  landing transition (state 52).
+- **First knockdown froze a character permanently** — `PosFreeze` was latched
+  with no reset on state change.
+- **`AnimElem = 3` triggers never fired** — the space-form argument syntax
+  wasn't parsed, so every animelem-triggered HitDef silently did nothing.
+- **CPU AI spammed attacks nonstop** — reworked to discrete actions with
+  cooldowns (approach / attack once / guard / retreat / idle).
+- Touch d-pad now supports **finger sliding** between directions, and idle
+  rounds are verified stable (no phantom input).
+
+v0.2.0 fixed the tiny top-left characters (uninitialized `world_scale`), added
+localcoord scaling for HD characters, per-button move mapping and the in-game
+data folder picker. v0.1.2 fixed a path-join bug ("GAME DATA MISSING"), v0.1.1
+fixed the black screen on launch.
 
 ## Install
 
-1. Download `releases/MUGEN-v0.2.0.apk`, copy to your phone, install (allow "unknown sources").
+1. Download `releases/MUGEN-v0.2.1.apk`, copy to your phone, install (allow "unknown sources").
 2. First launch extracts the bundled MUGEN data to
    `Android/data/com.mugen.android/files/mugen/`
    and asks for storage access (used by the custom-folder picker).

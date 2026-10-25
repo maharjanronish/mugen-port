@@ -167,11 +167,28 @@ void mg_update_anim(MgEntity *en) {
     int total = 0;
     for (int i = 0; i < a->nframes; i++) total += a->frames[i].ticks <= 0 ? 1 : a->frames[i].ticks;
     if (en->anim_time >= total) {
-        if (a->loopstart < a->nframes) {
+        if (a->loopstart >= 0 && a->loopstart < a->nframes) {
+            /* MUGEN semantics: the tick where the anim reaches its total is
+             * AnimTime = 0 (loop end / anim end) — triggers like
+             * "trigger1 = AnimTime = 0" must observe it. So we let anim_time
+             * REST at `total` for exactly one tick (AnimTime reports 0) and
+             * wrap to the loopstart on the NEXT tick. The old code wrapped
+             * immediately, so AnimTime never reached 0 and characters got
+             * stuck forever inside their attack states (v0.2.0 device bug:
+             * "punches continuously / move never ends"). */
+            if (en->anim_time == total) { en->cur_frame_index = a->nframes - 1; return; }
             int pre = 0;
             for (int i = 0; i < a->loopstart; i++) pre += a->frames[i].ticks <= 0 ? 1 : a->frames[i].ticks;
-            en->anim_time = pre + (en->anim_time - total);
-        } else en->anim_time = total - 1;
+            en->anim_time = pre + (en->anim_time - total - 1);
+            if (en->anim_time >= total) en->anim_time = pre;
+        } else {
+            /* non-looping: clamp at the end — AnimTime stays 0 (MUGEN's
+             * AnimTime goes negative after the end; 0 is the signal CNS
+             * states test for). The old `total - 1` clamp froze it at 1. */
+            en->anim_time = total;
+            en->cur_frame_index = a->nframes - 1;
+            return;
+        }
     }
     /* find current frame */
     int t = en->anim_time, idx = 0;
@@ -216,6 +233,13 @@ void mg_change_state(MgEntity *en, int state_no, int anim, int ctrl) {
     en->prev_state_no = en->state_no;
     en->state_no = state_no;
     en->state_time = 0;
+    /* PosFreeze is a per-state flag in MUGEN: controllers assert it with
+     * trigger1 = 1 (e.g. common1.cns state 5100 lie-down bounce) and it
+     * must lapse when the state changes. v0.2.0 bug: it was latched
+     * forever, so the first knockdown PERMANENTLY froze that character
+     * (velocity zeroed every frame — the CPU looked "stuck" at its x
+     * position for the rest of the fight). */
+    en->pos_freeze = 0;
     MgState *st = mg_find_state(en, state_no);
     if (st) {
         if (st->type) en->statetype = st->type;
@@ -329,13 +353,19 @@ static void exec_sctrl(MgEntity *en, MgStateCtl *c) {
     else if (mg_str_ieq(t, "velset")) {
         const char *x = ctl_param(c, "x"), *y = ctl_param(c, "y");
         double cs = en->coord_scale > 0 ? en->coord_scale : 1.0;
-        if (x) en->vel_x = ctl_param_e(c, en, "x", en->vel_x) * cs;
+        /* MUGEN: X velocities in CNS are FACING-RELATIVE (positive = toward
+         * the direction the character faces — walk.fwd/jump.fwd are positive,
+         * *.back are negative in every CNS). Storing them absolute made every
+         * left-facing character moonwalk (walk away while animating toward). */
+        double fx = en->facing < 0 ? -1.0 : 1.0;
+        if (x) en->vel_x = ctl_param_e(c, en, "x", en->vel_x) * cs * fx;
         if (y) en->vel_y = ctl_param_e(c, en, "y", en->vel_y) * cs;
     }
     else if (mg_str_ieq(t, "veladd")) {
         const char *x = ctl_param(c, "x"), *y = ctl_param(c, "y");
         double cs = en->coord_scale > 0 ? en->coord_scale : 1.0;
-        if (x) en->vel_x += ctl_param_e(c, en, "x", 0) * cs;
+        double fx = en->facing < 0 ? -1.0 : 1.0;
+        if (x) en->vel_x += ctl_param_e(c, en, "x", 0) * cs * fx;
         if (y) en->vel_y += ctl_param_e(c, en, "y", 0) * cs;
     }
     else if (mg_str_ieq(t, "velmul")) {
@@ -352,7 +382,8 @@ static void exec_sctrl(MgEntity *en, MgStateCtl *c) {
     else if (mg_str_ieq(t, "posadd")) {
         const char *x = ctl_param(c, "x"), *y = ctl_param(c, "y");
         double cs = en->coord_scale > 0 ? en->coord_scale : 1.0;
-        if (x) en->pos_x += ctl_param_e(c, en, "x", 0) * cs;
+        double fx = en->facing < 0 ? -1.0 : 1.0;   /* MUGEN: x offset facing-relative */
+        if (x) en->pos_x += ctl_param_e(c, en, "x", 0) * cs * fx;
         if (y) en->pos_y += ctl_param_e(c, en, "y", 0) * cs;
     }
     else if (mg_str_ieq(t, "ctrlset")) {

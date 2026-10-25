@@ -209,44 +209,69 @@ static void apply_physics(MgEntity *en) {
     double cs = en->coord_scale > 0 ? en->coord_scale : 1.0;
     if (en->pos_freeze) { en->vel_x = 0; en->vel_y = 0; return; }
 
+    /* MUGEN tick order: gravity (air) -> POSITION INTEGRATION -> ground
+     * friction/threshold (which only prepares velocity for the NEXT tick).
+     * v0.2.0/v0.2.1-rc bug: friction was applied BEFORE integration, so a
+     * walking character's velocity was decayed and then threshold-stopped
+     * within the same tick (velset 2.93 -> friction 2.49 -> below the 2.67
+     * threshold -> zeroed) and NOBODY could ever walk. With VelSet re-firing
+     * every frame while the direction is held, movement now uses the full
+     * velset speed, and friction only decays the residual velocity after
+     * the player lets go — exactly like MUGEN. */
     if (en->physics == 'A') {
         en->vel_y += mg_char_const(ch, "movement.yaccel", 0.44) * cs;
         if (en->vel_y > 8.0 * cs) en->vel_y = 8.0 * cs;
-    } else if (en->physics == 'S' || en->physics == 'C') {
-        if (en->vel_y < 0) {
-            en->vel_y += mg_char_const(ch, "data.yaccel", 0.44) * cs;
-        } else {
-            /* ground friction */
-            double fric = (en->physics == 'C') ?
-                mg_char_const(ch, "movement.crouch.friction", 0.85) :
-                mg_char_const(ch, "movement.stand.friction", 0.85);
-            if (en->movetype != 'H' || 1) {
-                en->vel_x *= fric;
-                double th = (en->physics == 'C') ?
-                    mg_char_const(ch, "movement.crouch.friction.threshold", 0.2) :
-                    mg_char_const(ch, "movement.stand.friction.threshold", 0.2);
-                if (fabs(en->vel_x) < th) en->vel_x = 0;
-            }
-            en->vel_y = 0;
-        }
     }
     /* apply velocity (vel is in char-local units: convert to world) */
     en->pos_x += en->vel_x * cs;
     en->pos_y += en->vel_y * cs;
+    if (en->physics == 'S' || en->physics == 'C') {
+        if (en->vel_y < 0) {
+            en->vel_y += mg_char_const(ch, "data.yaccel", 0.44) * cs;
+        } else {
+            double fric = (en->physics == 'C') ?
+                mg_char_const(ch, "movement.crouch.friction", 0.85) :
+                mg_char_const(ch, "movement.stand.friction", 0.85);
+            en->vel_x *= fric;
+            /* threshold is authored in CHAR-LOCAL units (KFM: 2 at 240p,
+             * KFM720: 8 at 720p) but vel_x is stored in WORLD units —
+             * scale by coord_scale. */
+            double th = ((en->physics == 'C') ?
+                mg_char_const(ch, "movement.crouch.friction.threshold", 0.2) :
+                mg_char_const(ch, "movement.stand.friction.threshold", 0.2)) * cs;
+            if (fabs(en->vel_x) < th) en->vel_x = 0;
+            en->vel_y = 0;
+        }
+    }
 
     /* ground: y >= 0 means below floor */
-    if (en->pos_y >= 0 && en->vel_y >= 0 && en->statetype != 'A') {
-        en->pos_y = 0;
-    }
-    if (en->pos_y > 0) {
-        /* fell to ground while in air */
-        if (en->statetype == 'A' && en->movetype != 'H') {
-            /* landing handled by common states via statetype set; engine floors */
-        }
-        if (en->pos_y >= 0 && en->gethit.fall_fall) {
+    if (en->pos_y >= 0) {
+        if (en->statetype == 'A') {
+            /* LANDING (engine-side, MUGEN semantics: any airborne entity
+             * touching the floor with downward velocity lands).
+             * v0.2.0 bug: air states were never floored — a jump attack
+             * (state 630 etc. has no ChangeState of its own) fell through
+             * the floor FOREVER, y sinking thousands of pixels below the
+             * stage. The char looked "frozen mid-air" and could never be
+             * hit again. gethit falls (movetype H) are floored too, but
+             * keep vel_y so common1.cns 5035/5040's
+             * "Vel Y > 0, Pos Y >= 0 -> ChangeState 52" triggers can fire. */
+            if (en->vel_y > 0) {
+                en->pos_y = 0;
+                if (en->movetype != 'H') {
+                    en->vel_y = 0;
+                    if (mg_find_state(en, 52))
+                        mg_change_state(en, 52, -1, -1);      /* jump land */
+                    else {
+                        mg_change_state(en, 0, -1, 1);        /* no 52 in char */
+                        en->statetype = 'S'; en->physics = 'S';
+                    }
+                }
+            }
+        } else {
             en->pos_y = 0;
+            if (en->vel_y > 0) en->vel_y = 0;
         }
-        if (en->pos_y > 0) en->pos_y = en->pos_y; /* let states manage */
     }
 }
 
@@ -279,32 +304,40 @@ static int attr_is_attack(const char *attr) {
 }
 
 static int guardflag_matches(MgEntity *vic, const char *guardflag) {
+    /* guardflag: which positions can guard the hit — M = grounded (stand or
+     * crouch), H = standing, L = crouching, A = air. v0.2.1-rc bug: 'want'
+     * was uppercase but the flag chars are lowercased before compare, so
+     * NOTHING ever matched and nobody could guard. */
     if (!guardflag || !guardflag[0]) return 0;
-    char want = 0;
-    switch (vic->statetype) {
-        case 'S': want = 'S'; break;
-        case 'C': want = 'C'; break;
-        case 'A': want = 'A'; break;
-        case 'L': want = 'L'; break;
-    }
     for (const char *p = guardflag; *p; p++) {
         char c = *p | 32;
-        if (c == want) return 1;
+        switch (c) {
+            case 'm': if (vic->statetype == 'S' || vic->statetype == 'C') return 1; break;
+            case 'h': if (vic->statetype == 'S') return 1; break;
+            case 'l': if (vic->statetype == 'C') return 1; break;
+            case 'a': if (vic->statetype == 'A') return 1; break;
+        }
     }
     return 0;
 }
 
 static int hitflag_matches(MgEntity *vic, const char *hitflag) {
-    if (!hitflag || !hitflag[0]) return 1;   /* default: HAF */
-    char want = 0;
-    if (vic->movetype == 'H') want = 'H';
-    else if (vic->statetype == 'L') want = 'L';
-    else if (vic->statetype == 'A') want = 'A';
-    else want = 'F';   /* stand/crouch grounded normal */
+    /* hitflag: which victims the hit connects on — M = grounded (stand or
+     * crouch), H = standing, L = crouching, A = airborne, F = falling/gethit,
+     * D = lying down. v0.2.1-rc bug: uppercase 'want' vs lowercased flag
+     * chars meant NO hit ever passed this check (every attack whiffed
+     * through the opponent). */
+    if (!hitflag || !hitflag[0]) return 1;
     for (const char *p = hitflag; *p; p++) {
         char c = *p | 32;
-        if (c == want) return 1;
-        if (c == 'd' && vic->statetype == 'L') return 1;   /* downed */
+        switch (c) {
+            case 'm': if (vic->statetype == 'S' || vic->statetype == 'C') return 1; break;
+            case 'h': if (vic->statetype == 'S') return 1; break;
+            case 'l': if (vic->statetype == 'C') return 1; break;
+            case 'a': if (vic->statetype == 'A') return 1; break;
+            case 'f': if (vic->movetype == 'H') return 1; break;
+            case 'd': if (vic->statetype == 'L') return 1; break;
+        }
     }
     return 0;
 }
@@ -336,6 +369,7 @@ static void apply_hit(MgEntity *att, MgEntity *vic) {
     }
     if (a1 > a2 || c1 > c2) return;   /* no boxes */
     if (!rects_overlap(a1, b1, a2, b2, c1, d1, c2, d2)) return;
+
 
     /* once per hitdef per victim */
     if (att->hitdef.already_hit_vic[vic - g_entities]) return;
@@ -452,7 +486,14 @@ static void apply_hit(MgEntity *att, MgEntity *vic) {
     }
 }
 
-/* ---------------- AI (simple) ---------------- */
+/* ---------------- AI (simple) ----------------
+ * v0.2.1 redesign: the old AI spammed punch/kick every ~6 frames for the
+ * whole 20-40 frame action window — on device that read as "the CPU never
+ * stops punching" and could keep the player locked in hitstun forever.
+ * New model (closer to IKEMEN GO's discrete-action AI): each action plays
+ * a CLEAN input pattern — one button press for a few frames, then release —
+ * followed by a recovery gap before the next decision. Actions also include
+ * idle and retreat so the player gets breathing room. */
 static void simple_ai(MgEntity *en) {
     if (!en->is_cpu || !en->ctrl) { en->buttons = 0; return; }
     MgEntity *p2 = mg_p2_of(en);
@@ -460,26 +501,30 @@ static void simple_ai(MgEntity *en) {
     double dist = fabs(p2->pos_x - en->pos_x);
     en->ai_timer--;
     if (en->ai_timer <= 0) {
-        en->ai_timer = 20 + rand() % 40;
+        en->ai_timer = 30 + rand() % 50;          /* decision interval */
+        en->ai_action_t = 0;                      /* time inside current action */
         int r = rand() % 10;
-        if (dist > 90) en->ai_action = (r < 6) ? 1 : 2;    /* walk fwd or jump */
-        else if (dist > 40) en->ai_action = (r < 3) ? 3 : (r < 6 ? 4 : 1);  /* attack or approach */
-        else en->ai_action = (r < 5) ? 3 : (r < 7 ? 4 : 5); /* attack or guard */
+        if (dist > 90)        en->ai_action = (r < 5) ? 1 : (r < 7 ? 2 : 0);
+        else if (dist > 40)   en->ai_action = (r < 2) ? 3 : (r < 4 ? 4 : (r < 8 ? 1 : 0));
+        else                  en->ai_action = (r < 3) ? 3 : (r < 4 ? 4 : (r < 6 ? 5 : (r < 8 ? 6 : 0)));
+        /* 0 idle, 1 approach, 2 jump-in, 3 light attack, 4 strong attack,
+         * 5 guard, 6 retreat */
     }
+    en->ai_action_t++;
     uint32_t fwd = (en->facing > 0) ? BTN_FWD : BTN_BACK;
     uint32_t back = (en->facing > 0) ? BTN_BACK : BTN_FWD;
     switch (en->ai_action) {
         case 1: en->buttons = fwd; break;
-        case 2: en->buttons = fwd | BTN_U; break;
-        case 3: {
-            /* punch/kick: press a then b briefly */
-            en->buttons = ((g_game.frames_done / 6) % 2) ? BTN_A : 0;
-            if (dist < 50 && (rand() % 3 == 0)) en->buttons |= BTN_B;
+        case 2: en->buttons = (en->ai_action_t < 6) ? (fwd | BTN_U) : 0; break;
+        case 3: /* ONE light press, then hands off */
+            en->buttons = (en->ai_action_t >= 2 && en->ai_action_t <= 5) ? BTN_A : 0;
             break;
-        }
-        case 4: en->buttons = fwd | ((g_game.frames_done / 8) % 2 ? BTN_A : 0); break;
-        case 5: en->buttons = back; break;
-        default: en->buttons = 0;
+        case 4: /* ONE strong press, then hands off */
+            en->buttons = (en->ai_action_t >= 2 && en->ai_action_t <= 6) ? BTN_X : 0;
+            break;
+        case 5: en->buttons = back; break;        /* guard: hold away */
+        case 6: en->buttons = back; break;        /* retreat */
+        default: en->buttons = 0;                 /* idle / recovery */
     }
 }
 
@@ -641,8 +686,12 @@ void mg_fight_frame(void) {
         MgEntity *en = &g_entities[i];
         /* AI fills buttons */
         if (en->is_cpu) simple_ai(en);
-        /* record input history */
-        mg_input_record(i, en->buttons);
+        /* record input history — keyed by PLAYER, not entity index: helpers
+         * share player_no with their owner and must not clobber the owner's
+         * input history (that would make held buttons look re-pressed every
+         * other tick and commands re-fire endlessly). */
+        if (!en->is_helper)
+            mg_input_record(en->player_no & 1, en->buttons);
         /* auto-face opponent when standing and ctrl */
         MgEntity *p2 = mg_p2_of(en);
         if (p2 && en->ctrl && en->statetype == 'S' && en->movetype == 'I' && !en->is_helper) {

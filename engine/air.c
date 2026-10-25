@@ -34,7 +34,7 @@ MgAir *mg_air_load(const char *path) {
                 cur->frames = NULL; cur->nframes = 0;
                 int fcap = 16;
                 cur->frames = (MgAnimFrame*)malloc(fcap * sizeof(MgAnimFrame));
-                cur->loopstart = 0;
+                cur->loopstart = 0;   /* default: loop back to frame 0 (MUGEN default); -1 = last frame time -1 (play once) */
             }
             continue;
         }
@@ -57,6 +57,12 @@ MgAir *mg_air_load(const char *path) {
                 if (sscanf(it.value, "%d,%d,%d,%d", &v[0], &v[1], &v[2], &v[3]) == 4) {
                     arr[*cnt].x1 = v[0]; arr[*cnt].y1 = v[1];
                     arr[*cnt].x2 = v[2]; arr[*cnt].y2 = v[3];
+                    /* MUGEN authors boxes in ANY corner order (KFM's head box
+                     * is "24,-324,-28,-384" — x1 > x2!). Without normalizing,
+                     * the reversed box poisons apply_hit's union (c1 > c2 ->
+                     * "no boxes") and NO hit ever connects. */
+                    if (arr[*cnt].x1 > arr[*cnt].x2) { int t = arr[*cnt].x1; arr[*cnt].x1 = arr[*cnt].x2; arr[*cnt].x2 = t; }
+                    if (arr[*cnt].y1 > arr[*cnt].y2) { int t = arr[*cnt].y1; arr[*cnt].y1 = arr[*cnt].y2; arr[*cnt].y2 = t; }
                     (*cnt)++;
                 }
             }
@@ -75,6 +81,8 @@ MgAir *mg_air_load(const char *path) {
                 if (sscanf(it.value, "%d,%d,%d,%d", &v[0], &v[1], &v[2], &v[3]) == 4) {
                     arr[*cnt].x1 = v[0]; arr[*cnt].y1 = v[1];
                     arr[*cnt].x2 = v[2]; arr[*cnt].y2 = v[3];
+                    if (arr[*cnt].x1 > arr[*cnt].x2) { int t = arr[*cnt].x1; arr[*cnt].x1 = arr[*cnt].x2; arr[*cnt].x2 = t; }
+                    if (arr[*cnt].y1 > arr[*cnt].y2) { int t = arr[*cnt].y1; arr[*cnt].y1 = arr[*cnt].y2; arr[*cnt].y2 = t; }
                     (*cnt)++;
                 }
             }
@@ -125,6 +133,14 @@ MgAir *mg_air_load(const char *path) {
                 cur->frames[fi] = f;
                 cur->nframes++;
                 cur->total_ticks += (f.ticks <= 0 ? 1 : f.ticks);
+                /* MUGEN semantics: a frame with time = -1 means "hold this
+                 * frame forever" (non-looping animation). Default looping is
+                 * to frame 0 (that's how walk/idle anims without explicit
+                 * LoopStart loop in real MUGEN — KFM has only 9 LoopStart
+                 * markers across 117 anims). Mark such anims non-looping via
+                 * the -1 sentinel; v0.2.1-rc wrongly defaulted EVERY anim to
+                 * non-looping, freezing characters on the last walk frame. */
+                if (f.ticks < 0) cur->loopstart = -1;
                 nt1 = nt2 = 0;  /* per-frame clsn reset */
             }
         }

@@ -199,6 +199,19 @@ static MgExpr *parse_primary(Lexer *lx) {
         if (t) {
             MgExpr *e = ex_new(ET_TRIG);
             e->trig = t;
+            /* MUGEN space-form arguments: "AnimElem = 3", "var = 1" — the
+             * function-style triggers accept their argument after '=' when
+             * written without parentheses. Without this, "AnimElem = 3"
+             * parsed as trig-without-arg (always false) and every
+             * animelem-triggered HitDef silently never fired. */
+            if (lx->tok == TOK_OP && lx->op == '=' &&
+                (t == TR_ANIMELEM || t == TR_ANIMELEMTIME || t == TR_VAR ||
+                 t == TR_FVAR || t == TR_SYSVAR || t == TR_SYSFVAR ||
+                 t == TR_ANIMEXIST || t == TR_SELFANIMEXIST)) {
+                lx_next(lx);               /* consume '=' */
+                e->a = parse_expr(lx);     /* argument expression */
+                return e;
+            }
             /* argument: (expr[, expr[, expr]]) or bare int */
             if (lx->tok == TOK_LPAREN) {
                 lx_next(lx);
@@ -316,7 +329,7 @@ static MgVal eval_trig(int trig, MgExpr *arg, MgExpr *arg2, MgEntity *en) {
                 int tk = a->frames[i].ticks <= 0 ? 1 : a->frames[i].ticks;
                 if (t < tk) { idx = i + 1; break; }
                 t -= tk;
-                if (i == a->nframes - 1) { idx = a->loopstart + 1; t = 0; }
+                if (i == a->nframes - 1) { idx = (a->loopstart >= 0 ? a->loopstart : i) + 1; t = 0; }
             }
             v.i = (idx == n) ? 1 : 0;
             break;
@@ -355,7 +368,7 @@ static MgVal eval_trig(int trig, MgExpr *arg, MgExpr *arg2, MgEntity *en) {
         case TR_POWERMAX: v.i = en->powermax; break;
         case TR_POS_X: v.is_float = 1; v.f = en->pos_x; break;
         case TR_POS_Y: v.is_float = 1; v.f = en->pos_y; break;
-        case TR_VEL_X: v.is_float = 1; v.f = en->vel_x; break;
+        case TR_VEL_X: v.is_float = 1; v.f = en->vel_x * (en->facing < 0 ? -1.0 : 1.0); break;
         case TR_VEL_Y: v.is_float = 1; v.f = en->vel_y; break;
         case TR_COMMAND: {
             /* handled specially: compare with string operand at node level */

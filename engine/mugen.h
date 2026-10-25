@@ -288,7 +288,7 @@ typedef struct {
     int ctrl_overridden;
     int player_no, teamside;
     int is_cpu;
-    int ai_timer, ai_action;
+    int ai_timer, ai_action, ai_action_t;   /* ai_action_t: frames inside current AI action */
     int angle;
     int drawpal_time;
     /* localcoord conversion: char-local units -> stage/world units.
