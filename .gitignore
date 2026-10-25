@@ -1,0 +1,22 @@
+# ---- build outputs ----
+android/app/obj/
+android/app/libs/
+android/app/build/
+*.o
+*.os
+
+# ---- generated jni links (created by android/build-native.sh) ----
+android/app/jni/engine
+android/app/jni/SDL
+
+# ---- APKs (releases/ is the exception) ----
+*.apk
+!releases/*.apk
+
+# ---- signing ----
+debug.keystore
+
+# ---- misc ----
+__pycache__/
+.DS_Store
+*.log
