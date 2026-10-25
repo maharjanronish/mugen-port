@@ -57,11 +57,11 @@ int main(int argc, char **argv) {
         return (g_game.game_phase == 2) ? 0 : 1;
     }
 
-    /* unit test: which commands match with EMPTY input? */
+    /* unit test: which commands match with EMPTY input? (new pipeline) */
     printf("=== command match unit test (empty history) ===\n");
     for (int i = 0; i < g_entities[0].ch->ncommands; i++) {
         MgCommand *c = &g_entities[0].ch->commands[i];
-        int m = mg_try_match(&g_entities[0], c);
+        int m = mg_check_command(&g_entities[0], c->name);
         if (m) printf("  MATCH: name=%s cmd=%s\n", c->name, c->cmd);
     }
     printf("=== end unit test ===\n");
@@ -114,21 +114,33 @@ int main(int argc, char **argv) {
             mg_expr_free(ex);
         }
     }
-    /* test with FWD held: record 10 frames then check */
-    for (int i = 0; i < 10; i++) mg_input_record(0, BTN_FWD);
+    /* test with FWD held: run pipeline 10 frames then check */
+    for (int i = 0; i < 10; i++) {
+        g_entities[0].buttons = BTN_FWD;
+        mg_input_update(&g_entities[0]);
+        mg_commands_step(&g_entities[0]);
+    }
+    g_entities[0].buttons = 0;
     printf("=== commands matching with FWD held ===\n");
     for (int i = 0; i < g_entities[0].ch->ncommands; i++) {
         MgCommand *c = &g_entities[0].ch->commands[i];
-        int m = mg_try_match(&g_entities[0], c);
+        int m = mg_check_command(&g_entities[0], c->name);
         if (m) printf("  MATCH: name=%s cmd=%s\n", c->name, c->cmd);
     }
     /* punch test: A held 1 frame after idle */
-    for (int i = 0; i < 10; i++) mg_input_record(0, 0);
-    mg_input_record(0, BTN_A);
+    for (int i = 0; i < 10; i++) {
+        g_entities[0].buttons = 0;
+        mg_input_update(&g_entities[0]);
+        mg_commands_step(&g_entities[0]);
+    }
+    g_entities[0].buttons = BTN_A;
+    mg_input_update(&g_entities[0]);
+    mg_commands_step(&g_entities[0]);
+    g_entities[0].buttons = 0;
     printf("=== commands matching with A pressed ===\n");
     for (int i = 0; i < g_entities[0].ch->ncommands; i++) {
         MgCommand *c = &g_entities[0].ch->commands[i];
-        int m = mg_try_match(&g_entities[0], c);
+        int m = mg_check_command(&g_entities[0], c->name);
         if (m) printf("  MATCH: name=%s cmd=%s\n", c->name, c->cmd);
     }
     printf("=== end ===\n");

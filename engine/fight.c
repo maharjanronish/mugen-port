@@ -571,6 +571,8 @@ void mg_fight_start(void) {
         en->juggle_points = (int)mg_char_const(en->ch, "data.airjuggle", 15);
         g_nentities++;
     }
+    /* fresh input state for the round (Ikemen BufReset) */
+    mg_input_reset_all();
     /* reset explods/projectiles */
     memset(g_explods, 0, sizeof(g_explods));
     memset(g_projs, 0, sizeof(g_projs));
@@ -684,14 +686,10 @@ void mg_fight_frame(void) {
     /* entities */
     for (int i = 0; i < g_nentities; i++) {
         MgEntity *en = &g_entities[i];
-        /* AI fills buttons */
+        /* AI fills buttons (v0.2.1 redesign: one discrete action at a time,
+         * clean press/release patterns — the input then flows through the same
+         * Ikemen GO pipeline as human players, mg_run_entity -> input.c) */
         if (en->is_cpu) simple_ai(en);
-        /* record input history — keyed by PLAYER, not entity index: helpers
-         * share player_no with their owner and must not clobber the owner's
-         * input history (that would make held buttons look re-pressed every
-         * other tick and commands re-fire endlessly). */
-        if (!en->is_helper)
-            mg_input_record(en->player_no & 1, en->buttons);
         /* auto-face opponent when standing and ctrl */
         MgEntity *p2 = mg_p2_of(en);
         if (p2 && en->ctrl && en->statetype == 'S' && en->movetype == 'I' && !en->is_helper) {

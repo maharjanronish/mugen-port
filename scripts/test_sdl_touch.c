@@ -53,6 +53,21 @@ static void tap_button(int btn_idx, SDL_FingerID fid, int down) {
     int ww, wh; SDL_GetWindowSize(g_win, &ww, &wh);
     push_finger(fid, (float)b->x / ww, (float)b->y / wh, down);
 }
+/* finger at arbitrary LOGICAL coords (d-pad etc.) */
+static void pad_finger(SDL_FingerID fid, int lx, int ly, int down) {
+    int ww, wh; SDL_GetWindowSize(g_win, &ww, &wh);
+    push_finger(fid, (float)lx / ww, (float)ly / wh, down);
+}
+static void move_finger(SDL_FingerID fid, int lx, int ly) {
+    int ww, wh; SDL_GetWindowSize(g_win, &ww, &wh);
+    SDL_Event e; SDL_zero(e);
+    e.type = SDL_FINGERMOTION;
+    e.tfinger.touchId = 1;
+    e.tfinger.fingerId = fid;
+    e.tfinger.x = (float)lx / ww; e.tfinger.y = (float)ly / wh;
+    e.tfinger.dx = e.tfinger.dy = 0;
+    SDL_PushEvent(&e);
+}
 
 /* the REAL main-loop body, copied verbatim from platform_sdl.c main() */
 static void one_frame(void) {
@@ -127,7 +142,7 @@ int main(int argc, char **argv) {
     CHECK(g_game.game_phase >= 1, "keyboard events drove title -> select (phase=%d)", g_game.game_phase);
     /* select screen: confirm via touch on START area too */
     for (int i = 0; i < 6 && g_game.game_phase == 1; i++) {
-        tap_button(10, 99, 1); one_frame(); tap_button(10, 99, 0); one_frame();   /* START btn */
+        tap_button(6, 99, 1); one_frame(); tap_button(6, 99, 0); one_frame();   /* START btn */
     }
     printf("  phase=%d (touch nav %s)\n", g_game.game_phase,
            g_game.game_phase >= 2 ? "worked" : "did not advance");
@@ -149,8 +164,8 @@ int main(int argc, char **argv) {
     printf("[T3 tap X -> punch ONCE]\n");
     int entries200 = 0, cur200 = 0, prev_state = g_entities[0].state_no;
     int held_frames = 0, released_frames = 0;
-    /* press X (1080,500) hold 25 frames, then release, watch 90 frames */
-    tap_button(7, 50, 1);   /* idx 7 = BTN_X */
+    /* press X (1010,506) hold 25 frames, then release, watch 90 frames */
+    tap_button(3, 50, 1);   /* idx 3 = BTN_X */
     one_frame();
     CHECK(g_touchbuttons == BTN_X, "FINGERDOWN set g_touchbuttons=BTN_X (0x%X)", g_touchbuttons);
     CHECK(g_entities[0].buttons == BTN_X, "entity0 buttons = BTN_X (0x%X)", g_entities[0].buttons);
@@ -168,7 +183,7 @@ int main(int argc, char **argv) {
     CHECK(entries200 == 1, "holding X = exactly ONE move entry (got %d)", entries200);
 
     printf("[T4 release X]\n");
-    tap_button(7, 50, 0);
+    tap_button(3, 50, 0);
     one_frame();
     CHECK(g_touchbuttons == 0, "FINGERUP cleared g_touchbuttons (0x%X)", g_touchbuttons);
     for (int f = 0; f < 90; f++) {
@@ -192,9 +207,9 @@ int main(int argc, char **argv) {
     entries200 = 0; cur200 = 0; prev_state = g_entities[0].state_no;
     for (int t = 0; t < 3; t++) {
         for (int w = 0; w < 8; w++) one_frame();       /* idle gap */
-        tap_button(7, 51, 1);
+        tap_button(3, 51, 1);
         for (int w = 0; w < 4; w++) one_frame();
-        tap_button(7, 51, 0);
+        tap_button(3, 51, 0);
         for (int w = 0; w < 10; w++) {
             one_frame();
             if (g_entities[0].state_no != prev_state) {
@@ -226,16 +241,74 @@ int main(int argc, char **argv) {
         SDL_Window *w2 = SDL_CreateWindow("t2", 0, 0, 2340, 1080, 0);
         SDL_Renderer *r2 = SDL_CreateRenderer(w2, -1, SDL_RENDERER_SOFTWARE);
         SDL_RenderSetLogicalSize(r2, 1280, 720);
-        /* logical (1080,500) [button X] on 2340x1080 letterboxed:
+        /* logical (1010,506) [button X] on 2340x1080 letterboxed:
          * scale = min(2340/1280, 1080/720) = 1.5; xoff=(2340-1920)/2=210
-         * physical = (210 + 1080*1.5, (1080-1080)/2 + 500*1.5) = (1830, 750) */
+         * physical = (210 + 1010*1.5, (1080-1080)/2 + 506*1.5) = (1725, 759) */
         float gx, gy;
-        SDL_RenderWindowToLogical(r2, 1830.0f, 750.0f, &gx, &gy);
-        printf("  physical(1830,750) -> logical(%.0f,%.0f), want (1080,500)\n", gx, gy);
-        CHECK(gx > 1075 && gx < 1085 && gy > 495 && gy < 505,
+        SDL_RenderWindowToLogical(r2, 1725.0f, 759.0f, &gx, &gy);
+        printf("  physical(1725,759) -> logical(%.0f,%.0f), want (1010,506)\n", gx, gy);
+        CHECK(gx > 1005 && gx < 1015 && gy > 501 && gy < 511,
               "RenderWindowToLogical letterbox math correct");
         SDL_DestroyRenderer(r2);
         SDL_DestroyWindow(w2);
+    }
+
+    /* ---------------- T8: 8-way d-pad + full QCF motion ---------------- */
+    printf("[T8 d-pad diagonals + QCF_x motion (Ikemen GO pipeline)]\n");
+    {
+        /* 8a: diagonal sector sets D+F together (impossible on the old pad) */
+        g_touchbuttons = 0;
+        pad_finger(77, 260, 630, 1);          /* down-forward sector */
+        one_frame();
+        CHECK(g_touchbuttons == (BTN_D | BTN_FWD), "DF sector = D+F held (0x%X)", g_touchbuttons);
+
+        /* 8b: sliding DF -> F releases D automatically */
+        move_finger(77, 320, 560);            /* roll to pure forward */
+        one_frame();
+        CHECK(g_touchbuttons == BTN_FWD, "slide DF->F released D (0x%X)", g_touchbuttons);
+
+        /* 8c: slide into the dead zone -> neutral */
+        move_finger(77, 195, 565);
+        one_frame();
+        CHECK(g_touchbuttons == 0, "slide to hub = neutral (0x%X)", g_touchbuttons);
+        pad_finger(77, 195, 565, 0);          /* lift */
+        one_frame();
+        CHECK(g_touchbuttons == 0, "lift finger -> still neutral (0x%X)", g_touchbuttons);
+
+        /* 8d: the money test — full QCF on the virtual pad:
+         * hold D, release, DF, roll to F, tap X. The Ikemen GO matcher must
+         * fire QCF_x and put KFM into state 1000 (Kung Fu fireball). */
+        int saw_qcf = 0, entered_1000 = 0, prev_st = g_entities[0].state_no;
+        for (int w = 0; w < 10; w++) one_frame();          /* settle */
+        pad_finger(78, 190, 690, 1);                       /* D held */
+        for (int w = 0; w < 5; w++) one_frame();
+        pad_finger(78, 190, 690, 0);                       /* release D (~D edge) */
+        for (int w = 0; w < 5; w++) one_frame();
+        pad_finger(79, 260, 630, 1);                       /* DF edge */
+        for (int w = 0; w < 3; w++) one_frame();
+        move_finger(79, 320, 560);                         /* roll to F edge */
+        one_frame();
+        /* hold F a few more ticks: KFM quirk (also on Ikemen GO) — "blocking"
+         * ($F,x) rides the same motion because the $F edge fires on the
+         * D-release tick; waiting >3 ticks lets that window expire so the
+         * QCF fireball comes out instead of the parry. */
+        for (int w = 0; w < 4; w++) one_frame();
+        tap_button(3, 80, 1);                              /* press X */
+        one_frame();
+        saw_qcf = mg_check_command(&g_entities[0], "QCF_x");
+        printf("  after QCF+x: cmd QCF_x=%d state=%d\n", saw_qcf, g_entities[0].state_no);
+        CHECK(saw_qcf, "command QCF_x buffered on the tap tick");
+        tap_button(3, 80, 0);
+        for (int w = 0; w < 90; w++) {
+            one_frame();
+            if (g_entities[0].state_no == 1000) { entered_1000 = 1; break; }
+            if (g_entities[0].state_no != prev_st) prev_st = g_entities[0].state_no;
+        }
+        CHECK(entered_1000, "KFM entered fireball state 1000 (got %d)", g_entities[0].state_no);
+        /* let the move play out, back to standing */
+        for (int w = 0; w < 150; w++) one_frame();
+        CHECK(!attack_state(g_entities[0].state_no) || g_entities[0].state_no == 0,
+              "fireball state finished (state=%d)", g_entities[0].state_no);
     }
 
     printf("== %s (%d failures) ==\n", g_fail ? "FAILED" : "ALL PASSED", g_fail);

@@ -11,6 +11,7 @@ LOCAL_SRC_FILES := \
     engine/expr.c \
     engine/char.c \
     engine/state.c \
+    engine/input.c \
     engine/fight.c \
     engine/stage.c \
     engine/game.c \

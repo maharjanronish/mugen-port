@@ -11,10 +11,45 @@ directly on Android via SDL2.
 - Gradle-free build (ndk-build + aapt2/d8/apksigner), fully scriptable
 - LAN / Wi-Fi-hotspot netplay scaffolded (`engine/net.c`, experimental)
 
-Current release: **v0.2.1** (`releases/MUGEN-v0.2.1.apk`, ~4.7 MB) — the fight actually
-works: colors are correct, moves end, walking/hits/KO rounds all function.
+Current release: **v0.2.2** (`releases/MUGEN-v0.2.2.apk`, ~4.7 MB) — the game is now
+actually *playable*: special moves (QCF/QCB/double-tap run), combos and get-ups
+all work through a faithful port of the **Ikemen GO input system**.
 
-**v0.2.1** fixes 15 engine bugs found by a new end-to-end test harness that drives
+**v0.2.2 — Ikemen GO input engine.** The v0.2.1 command matcher required command
+elements on *consecutive* frames, so multi-element motions (QCF, double-tap run,
+any special) could never match at human input speed — on device this read as
+"buttons not working properly". v0.2.2 replaces the whole input pipeline with a
+line-by-line port of Ikemen GO (github.com/ikemen-engine/Ikemen-GO, `src/input.go`):
+
+- **InputBuffer key timers** — every key tracks held-ticks / released-ticks
+  (`1` = press edge this tick), so a bare command element matches ONLY on the
+  press edge: one tap = one move, holding never re-fires.
+- **Strict direction queries** — `U`/`D`/`B`/`F`/diagonals with perpendicular
+  conflicts, `$` (ignore-conflict 4-way), `*`, `~` releases, `~30a` charge times,
+  `~N`, `$N` — all semantics ported from `InputBuffer.State`/`StateCharge`.
+- **Command compiler** — comma steps, `+` AND / `|` OR, `>` no-other-input steps,
+  `AutoGreaterExpand` ("F, F" → "F, >~F, >F"), MUGEN backward-compat (slash
+  propagation, hold-only commands buffer=1), and the reverse loopOrder with
+  DirToButton same-frame islands (so `/$D, a` completes on the same tick you
+  press the button).
+- **Per-tick `Command.Step` matcher** with per-step completion, overall time
+  window and the `curbuftime` trigger buffer that CNS `Command("name")`
+  expressions test — plus same-name duplicate clearing (no "piano input" re-fires).
+- **B/F are facing-relative** (fbFlip), exactly like Ikemen's `CommandList.InputUpdate`.
+- **Virtual gamepad rebuilt**: ONE 8-way d-pad (45° sectors + dead zone +
+  continuous slide re-evaluation — rolling D→DF→F is how quarter-circles are
+  actually performed) instead of four separate direction circles that made
+  diagonals impossible. Attack buttons no longer re-pick when you slide — the
+  button you touch is the button you get; slide far off to release.
+- **Legacy `var(1) = value` VarSet syntax** — KFM gates every special on
+  `var(1)` ("combo condition") written this way; not parsing it silently
+  blocked ALL special moves. Same for `fvar(N)`.
+- **Engine-side get-up** (5110→5120 when `Time >= data.liedown.time`) — the
+  Elecbyte docs' hardcoded rule; without it a knocked-down character lay on
+  the floor forever and the fight stalled.
+- Keyboard mapping kept: arrows + Z/X/C (A/B/C) + A/S/D (X/Y/Z) + Enter (start).
+
+v0.2.1 fixed 15 engine bugs found by a new end-to-end test harness that drives
 the REAL SDL event loop (the old PC tests bypassed the platform layer entirely,
 which is why v0.2.0 looked green while broken on device):
 
@@ -52,7 +87,7 @@ fixed the black screen on launch.
 
 ## Install
 
-1. Download `releases/MUGEN-v0.2.1.apk`, copy to your phone, install (allow "unknown sources").
+1. Download `releases/MUGEN-v0.2.2.apk`, copy to your phone, install (allow "unknown sources").
 2. First launch extracts the bundled MUGEN data to
    `Android/data/com.mugen.android/files/mugen/`
    and asks for storage access (used by the custom-folder picker).
@@ -75,8 +110,11 @@ contain `data/select.def`. Folders that qualify are tagged `MUGEN` in the list.
 
 ## Controls (touch)
 
-- Left pad: `← → ↑ ↓` (double-tap `←←` / `→→` to run)
-- Right pad: `X Y Z` / `A B C` (top/bottom rows) + `ST` (start/pause)
+- Left: one 8-way d-pad — touch anywhere on the pad; slide through sectors to
+  roll motions (D → DF → F). Double-tap →→ / ←← to run.
+- Right: `X Y Z` / `A B C` (top/bottom rows) + `ST` (start/confirm).
+- Motions use Ikemen GO semantics: quarter-circle + punch gives you the special
+  (try D, release, DF, F, then X — Kung Fu fireball).
 - Physical keyboards and gamepads also work (SDL2 joystick support).
 
 ## Adding characters / stages (exactly like PC)

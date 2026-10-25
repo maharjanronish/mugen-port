@@ -20,144 +20,6 @@ MgState *mg_find_state(MgEntity *en, int state_no) {
     return NULL;
 }
 
-/* ---------------- command detection ----------------
- * Command string grammar: tokens separated by commas:
- *   /x  = hold direction+button,  ~x = release,  x = press,
- *   $B/$F/$U/$D = direction,  B/F/U/D = hold-dir,
- *   a b c x y z s = buttons,  > = no other input between
- */
-static int sym_to_btn(char c) {
-    switch (c) {
-        case 'a': return BTN_A; case 'b': return BTN_B; case 'c': return BTN_C;
-        case 'x': return BTN_X; case 'y': return BTN_Y; case 'z': return BTN_Z;
-        case 's': return BTN_S;
-        case 'U': return BTN_U; case 'D': return BTN_D;
-        case 'B': return BTN_BACK; case 'F': return BTN_FWD;
-    }
-    return 0;
-}
-
-/* input history ring */
-#define HIST 32
-typedef struct { uint32_t cur[HIST]; int pos; } InputHist;
-static InputHist g_hist[MG_MAX_PLAYERS];
-
-void mg_input_record(int player, uint32_t buttons) {
-    InputHist *h = &g_hist[player & 1];
-    h->pos = (h->pos + 1) % HIST;
-    h->cur[h->pos] = buttons;
-}
-
-static uint32_t hist_at(int player, int back) {
-    InputHist *h = &g_hist[player & 1];
-    return h->cur[(h->pos - back + HIST * 8) % HIST];
-}
-
-int mg_check_command(MgEntity *en, const char *name) {
-    if (!en->ch) return 0;
-    /* buffered command? (set when matched during frame input processing) */
-    for (int i = 0; i < en->ncmd; i++)
-        if (mg_str_ieq(en->cmdbuf[i].name, name) && en->cmdbuf[i].time > 0)
-            return 1;
-    /* also live-match against command definitions (instant commands) */
-    for (int i = 0; i < en->ch->ncommands; i++) {
-        MgCommand *c = &en->ch->commands[i];
-        if (!mg_str_ieq(c->name, name)) continue;
-        return mg_try_match(en, c);
-    }
-    return 0;
-}
-
-/* match one command against input history (facing-aware) */
-int mg_try_match(MgEntity *en, MgCommand *c) {
-    int pno = en->player_no & 1;
-    /* tokens */
-    char toks[16][24]; int ntok = 0;
-    const char *s = c->cmd;
-    while (*s && ntok < 16) {
-        char *t = toks[ntok];
-        int n = 0;
-        while (*s && *s != ',') { if (n < 23) t[n++] = *s; s++; }
-        t[n] = 0;
-        if (*s == ',') s++;
-        if (n > 0) ntok++;
-    }
-    if (ntok == 0) return 0;
-
-    /* walk history from newest to oldest, matching tokens in reverse */
-    int tok = ntok - 1;
-    int back = 0;
-    uint32_t prev_buttons = hist_at(pno, 1);
-    int must_hold_prev = 0;
-    for (; tok >= 0 && back < c->time + 2; back++) {
-        uint32_t cur = hist_at(pno, back);
-        char *t = toks[tok];
-        /* parse token */
-        int hold = 0, release = 0, dirsign = 0, nobreak = 0;
-        char bch = 0;
-        char *p = t;
-        while (*p == '/' || *p == '~' || *p == '$' || *p == '>') {
-            if (*p == '/') hold = 1;
-            else if (*p == '~') release = 1;
-            else if (*p == '$') dirsign = 1;
-            else if (*p == '>') nobreak = 1;
-            p++;
-        }
-        bch = *p;
-        int want = sym_to_btn(bch);
-        if (!want) continue;
-
-        /* facing-aware B/F */
-        int eff = want;
-        if (want == BTN_BACK && en->facing < 0) eff = BTN_FWD;
-        else if (want == BTN_FWD && en->facing < 0) eff = BTN_BACK;
-
-        if (hold) {
-            if (!(cur & eff)) return 0;
-            if (tok == 0) { /* first token: must be currently held */ }
-        } else if (release) {
-            if (cur & eff) return 0;
-            if (!(prev_buttons & eff)) return 0;
-        } else {
-            /* press edge */
-            if (!(cur & eff) || (prev_buttons & eff)) return 0;
-        }
-        prev_buttons = cur;
-        tok--;
-        if (tok < 0) return 1;
-        if (back >= c->time + 1) break;
-        (void)dirsign; (void)nobreak; (void)must_hold_prev;
-    }
-    return 0;
-}
-
-void mg_parse_input_commands(MgEntity *en) {
-    /* decay buffer */
-    for (int i = 0; i < en->ncmd; i++) en->cmdbuf[i].time--;
-    int n = 0;
-    for (int i = 0; i < en->ncmd; i++)
-        if (en->cmdbuf[i].time > 0) en->cmdbuf[n++] = en->cmdbuf[i];
-    en->ncmd = n;
-
-    if (!en->ch) return;
-    for (int i = 0; i < en->ch->ncommands; i++) {
-        MgCommand *c = &en->ch->commands[i];
-        if (mg_try_match(en, c)) {
-            int found = 0;
-            for (int j = 0; j < en->ncmd; j++)
-                if (mg_str_ieq(en->cmdbuf[j].name, c->name)) {
-                    en->cmdbuf[j].time = c->buffer > 0 ? c->buffer : 1;
-                    found = 1; break;
-                }
-            if (!found && en->ncmd < MG_CMD_MAX) {
-                strncpy(en->cmdbuf[en->ncmd].name, c->name, 31);
-                en->cmdbuf[en->ncmd].time = c->buffer > 0 ? c->buffer : 1;
-                en->ncmd++;
-            }
-        }
-    }
-}
-
 /* ---------------- animation ---------------- */
 void mg_update_anim(MgEntity *en) {
     if (!en->cur_anim || en->cur_anim->nframes == 0) return;
@@ -417,9 +279,37 @@ static void exec_sctrl(MgEntity *en, MgStateCtl *c) {
         int idx = ctl_param_i(c, en, "v", -1);
         const char *vs = ctl_param(c, "value");
         if (idx < 0) {
-            /* varrange-style: v = lo, hi via range params */
-            int lo = ctl_param_i(c, en, "v", -1);
-            (void)lo;
+            /* legacy Elecbyte form: "var(3) = <expr>" / "fvar(2) = <expr>".
+             * EXTREMELY common in state -1 (KFM gates every special on
+             * var(1) "combo condition" written this way) — v0.2.2 fix: not
+             * handling it silently blocked ALL special moves. */
+            for (int p = 0; p < c->nparams; p++) {
+                const char *nm = c->pnames[p];
+                const char *pv = c->pvals[p];
+                if (!nm || !pv) continue;
+                int isf = 0, nstart = -1;
+                if (strncasecmp(nm, "var(", 4) == 0) nstart = 4;
+                else if (strncasecmp(nm, "fvar(", 5) == 0) { nstart = 5; isf = 1; }
+                if (nstart > 0) {
+                    int n = atoi(nm + nstart);
+                    if (n >= 0 && (isf ? n < 64 : n < 64)) {
+                        MgExpr *ex = mg_expr_parse(pv);
+                        if (ex) {
+                            MgVal v = mg_expr_eval(ex, en);
+                            if (isf) {
+                                double d = v.is_float ? v.f : (double)v.i;
+                                en->fvar[n] = add ? en->fvar[n] + d : d;
+                            } else {
+                                int64_t iv = v.is_float ? (int64_t)v.f : v.i;
+                                en->var[n] = add ? en->var[n] + iv : iv;
+                            }
+                            mg_expr_free(ex);
+                        }
+                    }
+                    idx = -2;   /* handled via legacy path */
+                    break;
+                }
+            }
         }
         if (idx >= 0 && idx < 64 && vs) {
             MgExpr *ex = mg_expr_parse(vs);
@@ -623,9 +513,13 @@ void mg_run_entity(MgEntity *en) {
     en->special_noshadow = 0; en->special_nostandguard = 0; en->special_nocrouchguard = 0;
     en->special_noairguard = 0; en->special_nojugglecheck = 0;
 
-    /* command processing (state -1) */
+    /* command processing (state -1).
+     * Ikemen GO pipeline: key timers from held buttons (+facing), then the
+     * per-tick command matcher fills the trigger buffers that state -1 and
+     * CNS `Command("name")` expressions test (see input.c). */
     if (!en->is_helper) {
-        mg_parse_input_commands(en);
+        mg_input_update(en);
+        mg_commands_step(en);
 
         /* engine-side default movement (MUGEN hardcodes stand/walk/crouch/jump
          * transitions when ctrl is on — chars get these without any CNS code) */
@@ -648,6 +542,17 @@ void mg_run_entity(MgEntity *en) {
                 if (!holdingD) mg_change_state(en, 12, -1, -1);        /* stand up */
             }
         }
+        /* engine-side get-up from lying down (5110): Elecbyte docs —
+         * "Hit_liedown (5110): player changes to get-up state (5120) when
+         * ready". The CNS has no such ChangeState (common1.cns 5110 ends
+         * at ForceFeedback) — MUGEN hardcodes it. v0.2.2: without this, a
+         * knocked-down character lay in 5110 forever and the fight stalled
+         * (fight-flow "entity stuck >600 frames" regression). Gate: alive +
+         * lie-down time (data.liedown.time, default 60) elapsed. 5120's own
+         * ChangeState (AnimTime=0 -> state 0 ctrl=1) finishes the recovery. */
+        if (en->state_no == 5110 && en->alive &&
+            en->state_time >= (int)mg_char_const(en->ch, "data.liedown.time", 60))
+            mg_change_state(en, 5120, -1, -1);
         /* run state -1 (input commands) */
         MgState *neg = mg_find_state(en, -1);
         if (neg && en->ctrl) {

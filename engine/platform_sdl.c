@@ -20,7 +20,7 @@ void mg_logf(const char *fmt, ...) {
 }
 #endif
 
-#define MG_PORT_VERSION "0.2.1"
+#define MG_PORT_VERSION "0.2.2"
 
 static SDL_Window *g_win = NULL;
 static SDL_Renderer *g_ren = NULL;
@@ -332,30 +332,80 @@ void mg_platform_vibrate(int ms) {
 static uint32_t g_keybuttons[2] = {0, 0};
 static uint32_t g_touchbuttons = 0;
 
-/* touch layout (normalized to g_fbw x g_fbh) */
+/* ---- virtual gamepad v0.2.2 (Ikemen GO-style playability) ----
+ * The v0.1-0.2.1 pad was FOUR separate direction circles: a sliding thumb
+ * could only ever hold ONE direction, so diagonals (DF for QCF, UF for
+ * jump-forward) were IMPOSSIBLE to enter — every special motion silently
+ * failed, which read on-device as "buttons not working".
+ * Now: ONE 8-way d-pad. A finger anywhere on the pad maps to a direction
+ * sector (like a real d-pad corner); sliding re-evaluates every motion event,
+ * so quarter-circles come out naturally. */
+#define DPAD_CX    190
+#define DPAD_CY    560
+#define DPAD_R     130     /* hit radius */
+#define DPAD_DEAD  36      /* dead zone: neutral */
+#define DPAD_SLOT  (-2)    /* FingerSlot.btn_idx value for a d-pad finger */
+
+static uint32_t dpad_bits(int x, int y) {
+    int dx = x - DPAD_CX, dy = y - DPAD_CY;
+    long d2 = (long)dx * dx + (long)dy * dy;
+    if (d2 < (long)DPAD_DEAD * DPAD_DEAD) return 0;   /* neutral */
+    if (d2 > (long)DPAD_R * DPAD_R) return 0;         /* outside pad */
+    int ax = dx < 0 ? -dx : dx;
+    int ay = dy < 0 ? -dy : dy;
+    /* 45-degree sectors: pure axis if |a| > tan(67.5deg)*|b| (2.414) */
+    if ((long)ax * 1000 > 2414L * ay)
+        return dx > 0 ? BTN_FWD : BTN_BACK;
+    if ((long)ay * 1000 > 2414L * ax)
+        return dy > 0 ? BTN_D : BTN_U;
+    /* diagonal sector */
+    uint32_t bits = 0;
+    if (dx > 0) bits |= BTN_FWD; else bits |= BTN_BACK;
+    if (dy > 0) bits |= BTN_D;   else bits |= BTN_U;
+    return bits;
+}
+
+/* attack buttons (right side): 2 rows of 3 — A B C / X Y Z.
+ * Spacing 110px, r 55: thumb-friendly AND no overlap (the old 90px/52px
+ * layout pushed C/Z past the right screen edge, cutting them off). */
 typedef struct { int x, y, r; uint32_t bit; const char *label; } TouchBtn;
 static TouchBtn g_touchbtns[] = {
-    /* d-pad left side */
-    { 110, 560, 64, BTN_BACK,  "<" },
-    { 250, 560, 64, BTN_FWD,   ">" },
-    { 180, 450, 64, BTN_U,     "^" },
-    { 180, 660, 64, BTN_D,     "v" },
-    /* buttons right side: bottom row A B C, top row X Y Z */
-    { 1080, 620, 52, BTN_A, "A" },
-    { 1170, 620, 52, BTN_B, "B" },
-    { 1260, 620, 52, BTN_C, "C" },
-    { 1080, 500, 52, BTN_X, "X" },
-    { 1170, 500, 52, BTN_Y, "Y" },
-    { 1260, 500, 52, BTN_Z, "Z" },
-    { 640, 680, 40, BTN_START, "ST" },
+    { 1010, 632, 55, BTN_A, "A" },
+    { 1120, 632, 55, BTN_B, "B" },
+    { 1230, 632, 55, BTN_C, "C" },
+    { 1010, 506, 55, BTN_X, "X" },
+    { 1120, 506, 55, BTN_Y, "Y" },
+    { 1230, 506, 55, BTN_Z, "Z" },
+    { 640, 690, 38, BTN_START, "ST" },
 };
 
-/* finger -> button binding for multitouch (slots free when btn_idx < 0).
+/* finger -> control binding for multitouch (slots free when btn_idx < 0).
+ * btn_idx == DPAD_SLOT (-2): finger owns the d-pad; dbits = the direction
+ * bits it currently holds (so lifting one finger never releases another
+ * finger's directions).
  * fid MOUSE_SLOT marks the single hardware-mouse pointer (a real mouse, not
  * a synthesized touch-mouse event — those are disabled via hint). */
 #define MOUSE_SLOT ((SDL_FingerID)-2)
-typedef struct { SDL_FingerID fid; int btn_idx; } FingerSlot;
+typedef struct { SDL_FingerID fid; int btn_idx; uint32_t dbits; } FingerSlot;
 static FingerSlot g_fingers[16];
+
+/* NOTE: a slot is FREE iff btn_idx == -1. btn_idx >= 0 is an index into
+ * g_touchbtns; btn_idx == DPAD_SLOT (-2) means the finger owns the d-pad.
+ * (v0.2.2 bug: the lookup used ">= 0" for "occupied", so d-pad fingers were
+ * invisible to MOTION/UP and their directions stuck forever.) */
+static int slot_for_finger(SDL_FingerID fid, int take) {
+    for (int f = 0; f < 16; f++) {
+        if (g_fingers[f].btn_idx != -1 && g_fingers[f].fid == fid)
+            return f;
+        if (take && g_fingers[f].btn_idx == -1) {
+            g_fingers[f].fid = fid;
+            g_fingers[f].btn_idx = 0;   /* mark owned, caller sets real idx */
+            g_fingers[f].dbits = 0;
+            return f;
+        }
+    }
+    return -1;
+}
 
 static int touch_xy(SDL_Event *e, int *x, int *y) {
     if (e->type == SDL_FINGERDOWN || e->type == SDL_FINGERMOTION || e->type == SDL_FINGERUP) {
@@ -400,6 +450,10 @@ static void handle_touch(SDL_Event *e) {
     int x, y;
     if (!touch_xy(e, &x, &y)) return;
 
+    int is_toucher = (e->type == SDL_FINGERDOWN || e->type == SDL_FINGERUP ||
+                       e->type == SDL_FINGERMOTION);
+    SDL_FingerID fid = is_toucher ? e->tfinger.fingerId : MOUSE_SLOT;
+
     if (e->type == SDL_FINGERDOWN || e->type == SDL_MOUSEBUTTONDOWN) {
         /* title-screen DATA button opens the folder picker */
         extern void mg_picker_open(void);
@@ -408,48 +462,66 @@ static void handle_touch(SDL_Event *e) {
             int dx = x - 1210, dy = y - 46;
             if ((long)dx*dx + (long)dy*dy <= 52L*52L) { mg_picker_open(); return; }
         }
+        /* d-pad first: ANY touch inside the pad claims the d-pad finger slot
+         * (dead-zone taps start neutral — sliding out then engages a sector) */
+        int pdx = x - DPAD_CX, pdy = y - DPAD_CY;
+        long pad_d2 = (long)pdx * pdx + (long)pdy * pdy;
+        uint32_t db = dpad_bits(x, y);
+        int f = slot_for_finger(fid, 1);
+        if (db || pad_d2 <= (long)DPAD_R * DPAD_R) {
+            if (f >= 0) {
+                g_fingers[f].btn_idx = DPAD_SLOT;
+                g_fingers[f].dbits = db;
+                g_touchbuttons |= db;
+            }
+            return;
+        }
         int hit = pick_button(x, y);
-        if (hit >= 0) {
+        if (hit >= 0 && f >= 0) {
+            g_fingers[f].btn_idx = hit;
             g_touchbuttons |= g_touchbtns[hit].bit;
-            for (int f = 0; f < 16; f++)
-                if (g_fingers[f].btn_idx < 0) {
-                    g_fingers[f].fid = (e->type == SDL_MOUSEBUTTONDOWN) ? MOUSE_SLOT : e->tfinger.fingerId;
-                    g_fingers[f].btn_idx = hit;
-                    break;
-                }
+        } else if (f >= 0) {
+            g_fingers[f].btn_idx = -1;   /* tapped dead space: free the slot */
+            g_fingers[f].fid = 0;
         }
     } else if (e->type == SDL_FINGERUP || e->type == SDL_MOUSEBUTTONUP) {
-        SDL_FingerID fid = (e->type == SDL_FINGERUP) ? e->tfinger.fingerId : MOUSE_SLOT;
         for (int f = 0; f < 16; f++) {
-            if (g_fingers[f].btn_idx >= 0 && g_fingers[f].fid == fid) {
-                g_touchbuttons &= ~g_touchbtns[g_fingers[f].btn_idx].bit;
+            if (g_fingers[f].btn_idx != -1 && g_fingers[f].fid == fid) {
+                if (g_fingers[f].btn_idx == DPAD_SLOT)
+                    g_touchbuttons &= ~g_fingers[f].dbits;
+                else
+                    g_touchbuttons &= ~g_touchbtns[g_fingers[f].btn_idx].bit;
                 g_fingers[f].btn_idx = -1;
                 g_fingers[f].fid = 0;
+                g_fingers[f].dbits = 0;
             }
         }
     } else if (e->type == SDL_FINGERMOTION) {
-        /* v0.2.1: thumb sliding. Without this a finger that landed on the
-         * d-pad kept its ORIGINAL direction until lifted — sliding between
-         * directions (the normal way people hold a d-pad) did nothing, which
-         * felt like "the buttons don't work". Now a tracked finger re-picks
-         * its button as it moves: sliding off a button releases it, sliding
-         * onto another presses that one. */
-        for (int f = 0; f < 16; f++) {
-            if (g_fingers[f].btn_idx < 0 || g_fingers[f].fid != e->tfinger.fingerId)
-                continue;
-            int cur = g_fingers[f].btn_idx;
-            int hit = pick_button(x, y);
-            if (hit != cur) {
-                g_touchbuttons &= ~g_touchbtns[cur].bit;
-                if (hit >= 0) {
-                    g_touchbuttons |= g_touchbtns[hit].bit;
-                    g_fingers[f].btn_idx = hit;
+        int f = slot_for_finger(fid, 0);
+        if (f < 0) return;
+        if (g_fingers[f].btn_idx == DPAD_SLOT) {
+            /* continuous 8-way re-evaluation: sliding through D -> DF -> F
+             * is exactly how players roll quarter-circles */
+            uint32_t nb = dpad_bits(x, y);
+            if (nb != g_fingers[f].dbits) {
+                g_touchbuttons &= ~g_fingers[f].dbits;
+                if (nb) {
+                    g_touchbuttons |= nb;
+                    g_fingers[f].dbits = nb;
                 } else {
-                    g_fingers[f].btn_idx = -1;
-                    g_fingers[f].fid = 0;
+                    g_fingers[f].dbits = 0;
                 }
             }
-            break;   /* one slot per finger */
+        } else {
+            /* attack buttons: NO re-picking onto neighbors (the button you
+             * touched is the button you get). Slide far off -> release. */
+            TouchBtn *b = &g_touchbtns[g_fingers[f].btn_idx];
+            int dx = x - b->x, dy = y - b->y;
+            if ((long)dx*dx + (long)dy*dy > (long)b->r * b->r * 182 / 100) {
+                g_touchbuttons &= ~b->bit;
+                g_fingers[f].btn_idx = -1;
+                g_fingers[f].fid = 0;
+            }
         }
     }
 }
@@ -462,22 +534,51 @@ static void draw_circle(int cx, int cy, int r, uint8_t cr, uint8_t cg, uint8_t c
     }
 }
 
+/* one d-pad direction chevron (triangle), pointing along (mx,my) unit axis */
+static void draw_dpad_arrow(int mx, int my, uint32_t active) {
+    /* the arrow sits ~78px from pad center along its axis */
+    int ax = DPAD_CX + mx * 76, ay = DPAD_CY + my * 76;
+    int w0 = 13;                        /* half width at base */
+    uint8_t r = active ? 120 : 52, g = active ? 190 : 62, b = active ? 255 : 92;
+    uint8_t a = active ? 235 : 150;
+    if (my) {                           /* up/down: horizontal base, vertical tip */
+        int dir = my;
+        for (int i = 0; i <= 16; i++)   /* rows from base to tip */
+            mg_fill_rect(ax - w0 + (i * w0) / 16, ay + dir * (i - 8) - (dir < 0 ? 0 : 0),
+                         2 * (w0 - (i * w0) / 16), 1, r, g, b, a);
+    } else {                            /* left/right: vertical base, horizontal tip */
+        int dir = mx;
+        for (int i = 0; i <= 16; i++)
+            mg_fill_rect(ax + dir * (i - 8), ay - w0 + (i * w0) / 16, 1,
+                         2 * (w0 - (i * w0) / 16), r, g, b, a);
+    }
+}
+
 static void draw_touch_controls(void) {
+    /* ---- d-pad: one pad, 4 chevrons, active ones light up ---- */
+    draw_circle(DPAD_CX, DPAD_CY, DPAD_R - 2, 16, 20, 30, 130);        /* base */
+    draw_circle(DPAD_CX, DPAD_CY, DPAD_R - 2, 90, 100, 130, 40);       /* rim */
+    draw_circle(DPAD_CX, DPAD_CY, DPAD_DEAD - 4, 90, 100, 130, 60);    /* hub */
+    draw_dpad_arrow(0, -1, g_touchbuttons & BTN_U);
+    draw_dpad_arrow(0, 1,  g_touchbuttons & BTN_D);
+    draw_dpad_arrow(-1, 0, g_touchbuttons & BTN_BACK);
+    draw_dpad_arrow(1, 0,  g_touchbuttons & BTN_FWD);
+
+    /* ---- attack buttons: filled disc + rim + label; pressed = bright ---- */
     for (int i = 0; i < (int)(sizeof(g_touchbtns)/sizeof(g_touchbtns[0])); i++) {
         TouchBtn *b = &g_touchbtns[i];
-        uint8_t a = (g_touchbuttons & b->bit) ? 170 : 90;
-        draw_circle(b->x, b->y, b->r, 200, 200, 220, a);
-        draw_circle(b->x, b->y, b->r - 4, 60, 60, 90, a);
-        /* label: game font if loaded, builtin 5x7 otherwise */
-        int drawn = 0;
+        int on = (g_touchbuttons & b->bit) != 0;
+        draw_circle(b->x, b->y, b->r, 150, 165, 200, on ? 235 : 110);              /* rim */
+        draw_circle(b->x, b->y, b->r - 5, on ? 70 : 26, on ? 130 : 34,
+                    on ? 235 : 52, on ? 235 : 150);                                /* disc */
+        uint32_t label_rgb = on ? 0xFFFFFF : 0xB8C4E0;
         if (g_game.fonts[0]) {
             int tw = strlen(b->label) * (g_game.fonts[0]->size_w + 1) * 3;
             int th = g_game.fonts[0]->size_h * 3;
-            mg_render_text(g_game.fonts[0], b->label, b->x - tw/2, b->y - th/2, 3, 0xE0E0F0);
-            drawn = 1;
+            mg_render_text(g_game.fonts[0], b->label, b->x - tw/2, b->y - th/2, 3, label_rgb);
+        } else {
+            draw_builtin_text(b->label, b->x - 2*strlen(b->label)*2, b->y - 3, 2, label_rgb);
         }
-        if (!drawn)
-            draw_builtin_text(b->label, b->x - 2*strlen(b->label)*2, b->y - 3, 2, 0xE0E0F0);
     }
 }
 
@@ -600,7 +701,7 @@ void mg_picker_open(void) {
     g_picker_on = 1;
     /* release every held button so nothing leaks into the game */
     g_touchbuttons = 0;
-    for (int f = 0; f < 16; f++) { g_fingers[f].btn_idx = -1; g_fingers[f].fid = 0; }
+    for (int f = 0; f < 16; f++) { g_fingers[f].btn_idx = -1; g_fingers[f].fid = 0; g_fingers[f].dbits = 0; }
 }
 
 /* switch the live engine to another data folder */
@@ -785,7 +886,7 @@ static void poll_events(void) {
         else if (e.type == SDL_APP_WILLENTERBACKGROUND || e.type == SDL_APP_DIDENTERBACKGROUND) {
             /* release held buttons so nothing sticks after resume */
             g_touchbuttons = 0;
-            for (int f = 0; f < 16; f++) { g_fingers[f].btn_idx = -1; g_fingers[f].fid = 0; }
+            for (int f = 0; f < 16; f++) { g_fingers[f].btn_idx = -1; g_fingers[f].fid = 0; g_fingers[f].dbits = 0; }
         }
     }
 }
@@ -818,7 +919,7 @@ int main(int argc, char *argv[]) {
         SDL_Log("joystick disabled (%s)", SDL_GetError());
 
     /* touch finger slots start free */
-    for (int f = 0; f < 16; f++) { g_fingers[f].btn_idx = -1; g_fingers[f].fid = 0; }
+    for (int f = 0; f < 16; f++) { g_fingers[f].btn_idx = -1; g_fingers[f].fid = 0; g_fingers[f].dbits = 0; }
 
     SDL_DisplayMode dm;
     SDL_GetCurrentDisplayMode(0, &dm);

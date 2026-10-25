@@ -166,6 +166,12 @@ typedef struct {
     int time, buffer;
 } MgCommand;
 
+/* compiled command form (built by input.c at char load; opaque here) */
+struct MgCompiledCmd;
+
+/* Ikemen GO-style input pipeline (input.c) — implemented after MgEntity:
+ * see the engine API section below. */
+
 /* ---------------- states ---------------- */
 #define MG_MAX_STATE_PARAMS 24
 
@@ -201,6 +207,7 @@ typedef struct MgChar {
     MgSff *sff; MgAir *air; MgSnd *snd;
     MgState *states; int nstates;
     MgCommand *commands; int ncommands;
+    struct MgCompiledCmd *ccmds; int nccmds;   /* compiled commands (input.c) */
     MgConstEntry *consts;
     double pal_scale;      /* localcoord scale to 320x240 world */
     int localcoord_w, localcoord_h;
@@ -449,7 +456,16 @@ void mg_run_entity(MgEntity *en);
 void mg_update_anim(MgEntity *en);
 void mg_update_clsn(MgEntity *en);
 int  mg_check_command(MgEntity *en, const char *name);
-void mg_parse_input_commands(MgEntity *en);
+/* Ikemen GO-style input pipeline (input.c):
+ *   mg_input_update(en)   - per-tick key timers from en->buttons + facing
+ *   mg_commands_step(en)  - per-tick command matching; fills the per-command
+ *                           trigger buffers tested by mg_check_command()
+ *   mg_check_command()    - CNS trigger Command("name"): buffer > 0
+ * (ported from github.com/ikemen-engine/Ikemen-GO src/input.go) */
+void mg_input_update(MgEntity *en);
+void mg_commands_step(MgEntity *en);
+void mg_input_compile_char(MgChar *ch);
+void mg_input_reset_all(void);
 void mg_spawn_hitspark(int x, int y, int guard);
 void mg_update_camera(void);
 void mg_render_stage(int layer);
@@ -490,8 +506,6 @@ void mg_spawn_explod(MgEntity *en, MgStateCtl *c);
 void mg_remove_explods(MgEntity *en);
 void mg_spawn_dust(MgEntity *en);
 void mg_spawn_projectile(MgEntity *en, MgStateCtl *c);
-int mg_try_match(MgEntity *en, MgCommand *c);
-void mg_input_record(int player, uint32_t buttons);
 void mg_platform_vibrate(int ms);
 
 #define MG_DEFAULT_W 1280

@@ -52,8 +52,8 @@ echo "=== 2. link resources + manifest ==="
     --manifest src/main/AndroidManifest.xml \
     --min-sdk-version 26 \
     --target-sdk-version 28 \
-    --version-code 5 \
-    --version-name 0.2.1 \
+    --version-code 6 \
+    --version-name 0.2.2 \
     --java build/gen \
     --auto-add-overlay \
     build/res.zip

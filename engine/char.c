@@ -277,6 +277,8 @@ MgChar *mg_char_load(const char *defpath) {
         parse_cmd(ch, p);
         free(p);
     }
+    /* compile commands for the Ikemen GO-style matcher (input.c) */
+    mg_input_compile_char(ch);
     if (sfffile[0]) {
         char *p = mg_path_join(ch->dir, sfffile); mg_path_fix(p);
         ch->sff = mg_sff_load(p);
