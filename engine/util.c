@@ -1,5 +1,7 @@
 /* util.c — string/file helpers and MUGEN text config iteration */
 #include "mugen.h"
+#include <errno.h>
+#include <stdarg.h>
 
 char *mg_strdup(const char *s) {
     if (!s) return NULL;
@@ -39,7 +41,13 @@ int mg_file_exists(const char *path) {
 
 char *mg_read_file(const char *path, long *out_len) {
     FILE *f = fopen(path, "rb");
-    if (!f) return NULL;
+    if (!f) {
+        /* surface WHY the open failed — on Android this goes to logcat
+         * (ENOENT vs EACCES vs ...), which makes remote diagnosis trivial */
+        static int s_nfail = 0;
+        if (s_nfail++ < 8) mg_logf("[io] cannot open '%s' (%s)", path, strerror(errno));
+        return NULL;
+    }
     fseek(f, 0, SEEK_END);
     long n = ftell(f);
     fseek(f, 0, SEEK_SET);
@@ -54,16 +62,38 @@ char *mg_read_file(const char *path, long *out_len) {
 
 char *mg_path_join(const char *dir, const char *name) {
     if (!dir || !*dir) return mg_strdup(name);
-    int dl = strlen(dir);
+    size_t dl = strlen(dir);
     char *s = (char*)malloc(dl + strlen(name) + 2);
-    if (s[dl-1] == '/' || s[dl-1] == '\\') {
-        if (dl > 1 && s[dl-2] == ':') sprintf(s, "%s/%s", dir, name);
-        else sprintf(s, "%s%s", dir, name);
-    } else {
-        sprintf(s, "%s/%s", dir, name);
-    }
+    if (!s) return NULL;
+    /* BUGFIX (v0.1.2, was the "GAME DATA MISSING" cause on real devices):
+     * the old code tested the *uninitialized* malloc buffer (s[dl-1]) instead
+     * of dir[dl-1]. When that heap garbage byte happened to be '/' or '\\',
+     * the join emitted "<dir><name>" WITHOUT a separator — so on Android
+     * EVERY data file open failed (fonts/chars/stages all empty) and the
+     * engine showed its fatal-error box. Undefined behavior: PC builds got
+     * lucky (quiet heap -> zero byte -> correct branch), Android (SDL heap
+     * full of path strings) hit it every run.
+     * New logic: strip any trailing separators (both kinds — Windows accepts
+     * '/' too), then append exactly one '/'. */
+    size_t end = dl;
+    while (end > 0 && (dir[end-1] == '/' || dir[end-1] == '\\')) end--;
+    if (end == 0) sprintf(s, "/%s", name);   /* dir was "/", "\\" or "///" */
+    else sprintf(s, "%.*s/%s", (int)end, dir, name);
     return s;
 }
+
+/* mg_logf: portable logging. Non-Android builds -> stderr.
+ * The Android SDL build provides an SDL_Log-backed version in platform_sdl.c
+ * (bionic apps have no usable stderr — logs must go through logcat). */
+#ifndef __ANDROID__
+void mg_logf(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    fputc('\n', stderr);
+}
+#endif
 
 void mg_path_fix(char *s) { for (; *s; s++) if (*s == '\\') *s = '/'; }
 

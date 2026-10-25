@@ -5,7 +5,7 @@
 MgAir *mg_air_load(const char *path) {
     MgTextIter it;
     mg_text_open(&it, path);
-    if (!it.text) { fprintf(stderr, "[air] cannot open %s\n", path); return NULL; }
+    if (!it.text) { mg_logf("[air] cannot open %s", path); return NULL; }
 
     MgAir *air = (MgAir*)calloc(1, sizeof(MgAir));
     MgAnim *cur = NULL;
@@ -144,9 +144,9 @@ MgAnim *mg_air_get(MgAir *air, int number) {
 MgSnd *mg_snd_load(const char *path) {
     long len;
     uint8_t *d = (uint8_t*)mg_read_file(path, &len);
-    if (!d) { fprintf(stderr, "[snd] cannot open %s\n", path); return NULL; }
+    if (!d) { mg_logf("[snd] cannot open %s", path); return NULL; }
     if (len < 20 || memcmp(d, "ElecbyteSnd\0", 12) != 0) {
-        fprintf(stderr, "[snd] bad format: %s\n", path);
+        mg_logf("[snd] bad format: %s", path);
         free(d); return NULL;
     }
     uint32_t ver = d[12] | d[13]<<8 | d[14]<<16 | (uint32_t)d[15]<<24;
@@ -286,6 +286,6 @@ MgFont *mg_font_load(const char *dir, const char *name) {
         free(d);
         if (f) return f;
     }
-    fprintf(stderr, "[font] cannot load %s\n", full);
+    mg_logf("[font] cannot load %s", full);
     return NULL;
 }

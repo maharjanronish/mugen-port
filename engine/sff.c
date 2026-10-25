@@ -311,14 +311,14 @@ static MgSff *sff_load_v2(const uint8_t *d, long len, int font_mode) {
         }
         free(idx);
     }
-    if (nfail) fprintf(stderr, "[sff] %d sprites failed to decode in %s\n", nfail, "sff2");
+    if (nfail) mg_logf("[sff] %d sprites failed to decode in %s", nfail, "sff2");
     return sff;
 }
 
 MgSff *mg_sff_load(const char *path) {
     long len;
     uint8_t *d = (uint8_t*)mg_read_file(path, &len);
-    if (!d) { fprintf(stderr, "[sff] cannot open %s\n", path); return NULL; }
+    if (!d) { mg_logf("[sff] cannot open %s", path); return NULL; }
     MgSff *sff = NULL;
     if (len > 512 && memcmp(d, "ElecbyteSpr\0", 12) == 0) {
         if (d[15] == 2) sff = sff_load_v2(d, len, 0);
@@ -326,7 +326,7 @@ MgSff *mg_sff_load(const char *path) {
     } else if (len > 512 && memcmp(d, "ElecbyteSprite\0", 15) == 0) {
         sff = sff_load_v1(d, len, 15);        /* classic v1.01 15-byte sig */
     } else {
-        fprintf(stderr, "[sff] unknown format: %s\n", path);
+        mg_logf("[sff] unknown format: %s", path);
     }
     free(d);
     return sff;
@@ -335,7 +335,7 @@ MgSff *mg_sff_load(const char *path) {
 MgSff *mg_sff_load_font(const char *path) {
     long len;
     uint8_t *d = (uint8_t*)mg_read_file(path, &len);
-    if (!d) { fprintf(stderr, "[sff] cannot open %s\n", path); return NULL; }
+    if (!d) { mg_logf("[sff] cannot open %s", path); return NULL; }
     MgSff *sff = NULL;
     if (len > 512 && memcmp(d, "ElecbyteSpr\0", 12) == 0 && d[15] == 2)
         sff = sff_load_v2(d, len, 1);

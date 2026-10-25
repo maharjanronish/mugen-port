@@ -39,9 +39,17 @@ echo "=== 1. compile resources (aapt2) ==="
 "$BT/aapt2" compile --dir src/main/res -o build/res.zip
 
 echo "=== 2. link resources + manifest ==="
+# Explicit SDK levels: without them the APK ships with targetSdk=0, which makes
+# modern ROMs apply legacy-compat shims (e.g. ColorOS maxAspectRatio 1.86
+# letterboxing). 26/28 keeps pre-scoped-storage behavior; we only ever touch
+# our own app-specific dirs, which is allowed at any targetSdk.
 "$BT/aapt2" link -o build/base.apk \
     -I "$PLATFORM" \
     --manifest src/main/AndroidManifest.xml \
+    --min-sdk-version 26 \
+    --target-sdk-version 28 \
+    --version-code 3 \
+    --version-name 0.1.2 \
     --java build/gen \
     --auto-add-overlay \
     build/res.zip

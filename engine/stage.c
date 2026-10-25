@@ -4,7 +4,7 @@
 MgStage *mg_stage_load(const char *defpath) {
     MgTextIter it;
     mg_text_open(&it, defpath);
-    if (!it.text) { fprintf(stderr, "[stage] cannot open %s\n", defpath); return NULL; }
+    if (!it.text) { mg_logf("[stage] cannot open %s", defpath); return NULL; }
 
     MgStage *st = (MgStage*)calloc(1, sizeof(MgStage));
     strncpy(st->defpath, defpath, 500);
@@ -155,6 +155,6 @@ MgStage *mg_stage_load(const char *defpath) {
         st->sff = mg_sff_load(p);
         free(p);
     }
-    fprintf(stderr, "[stage] %s: %d bg elems, zoffset=%d\n", st->name, st->nbgs, st->zoffset);
+    mg_logf("[stage] %s: %d bg elems, zoffset=%d", st->name, st->nbgs, st->zoffset);
     return st;
 }

@@ -10,12 +10,16 @@ import java.io.OutputStream;
 
 public class MainActivity extends SDLActivity {
     private static final String TAG = "MUGEN";
-    /* Bump this when bundled data changes: forces re-extraction on upgrade. */
-    private static final String DATA_MARKER = ".mugen_v2";
+    /* Bump this when bundled data changes: forces re-extraction on upgrade.
+     * v0.1.2 bumped it so every device re-extracts once, guaranteeing a clean
+     * payload regardless of what older builds left on storage. */
+    private static final String DATA_MARKER = ".mugen_v3";
     /* Must exist after extraction, otherwise the payload is incomplete. */
     private static final String DATA_PROBE = "data/fight.def";
 
     private static volatile String sGameDir = null;
+    private static int sExtractedFiles = 0;
+    private static long sExtractedBytes = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -54,13 +58,19 @@ public class MainActivity extends SDLActivity {
             File mugenDir = new File(base, "mugen");
             File marker = new File(base, DATA_MARKER);
             if (marker.isFile() && probeOk(mugenDir)) {
+                Log.i(TAG, "game data already present (marker " + DATA_MARKER
+                        + " ok, probe ok): " + mugenDir.getAbsolutePath());
                 sGameDir = mugenDir.getAbsolutePath();
                 return;
             }
             Log.i(TAG, "Extracting MUGEN data to " + mugenDir.getAbsolutePath());
             long t0 = System.currentTimeMillis();
             marker.delete();
+            sExtractedFiles = 0;
+            sExtractedBytes = 0;
             copyAssetDir("mugen", mugenDir);
+            Log.i(TAG, "extraction stats: " + sExtractedFiles + " files, "
+                    + (sExtractedBytes / 1024) + " KiB");
             if (!probeOk(mugenDir)) {
                 throw new IllegalStateException(
                     "extraction incomplete: " + DATA_PROBE + " missing (assets broken?)");
@@ -106,8 +116,12 @@ public class MainActivity extends SDLActivity {
             out = new FileOutputStream(dstFile);
             byte[] buf = new byte[65536];
             int n;
-            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            long total = 0;
+            while ((n = in.read(buf)) > 0) { out.write(buf, 0, n); total += n; }
+            sExtractedFiles++;
+            sExtractedBytes += total;
         } catch (java.io.FileNotFoundException e) {
+            Log.w(TAG, "asset not a file (kept as dir): " + srcPath);
             dstFile.mkdirs(); // empty directory kept by aapt
         } finally {
             if (out != null) try { out.close(); } catch (Exception ignored) { }

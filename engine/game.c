@@ -49,7 +49,7 @@ void mg_load_fight_def(const char *gamedir) {
     char *p = mg_path_join(gamedir, "data/fight.def");
     char *text = mg_read_file(p, NULL);
     free(p);
-    if (!text) { fprintf(stderr, "[game] no fight.def; using defaults\n"); return; }
+    if (!text) { mg_logf("[game] no fight.def; using defaults"); return; }
     char buf[256];
     /* [Lifebar] */
     if (mg_def_get(text, "Lifebar", "p1.pos", buf, sizeof(buf))) {
@@ -77,7 +77,7 @@ void mg_load_select(void) {
     char *p = mg_path_join(g_game.base_dir, "data/select.def");
     char *text = mg_read_file(p, NULL);
     free(p);
-    if (!text) { fprintf(stderr, "[game] no select.def\n"); return; }
+    if (!text) { mg_logf("[game] no select.def"); return; }
 
     MgTextIter it;
     memset(&it, 0, sizeof(it));
@@ -111,7 +111,7 @@ void mg_load_select(void) {
                     g_game.nchars++;
                 }
             } else {
-                fprintf(stderr, "[select] char not found: %s\n", entry);
+                mg_logf("[select] char not found: %s", entry);
             }
         }
     }
@@ -134,7 +134,7 @@ void mg_load_select(void) {
             }
         }
     }
-    fprintf(stderr, "[game] roster: %d chars, %d stages\n", g_game.nchars, g_game.nstages);
+    mg_logf("[game] roster: %d chars, %d stages", g_game.nchars, g_game.nstages);
 }
 
 /* ---------------- title ---------------- */

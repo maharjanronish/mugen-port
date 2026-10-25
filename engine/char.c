@@ -27,7 +27,7 @@ double mg_char_const(MgChar *c, const char *key, double defval) {
 static void parse_states(MgChar *ch, const char *path, MgState **out_states, int *out_n) {
     MgTextIter it;
     mg_text_open(&it, path);
-    if (!it.text) { fprintf(stderr, "[cns] cannot open %s\n", path); return; }
+    if (!it.text) { mg_logf("[cns] cannot open %s", path); return; }
 
     MgState *st = NULL;
     MgStateCtl *ctl = NULL;
@@ -160,7 +160,7 @@ static void parse_states(MgChar *ch, const char *path, MgState **out_states, int
 static void parse_cmd(MgChar *ch, const char *path) {
     MgTextIter it;
     mg_text_open(&it, path);
-    if (!it.text) { fprintf(stderr, "[cmd] cannot open %s\n", path); return; }
+    if (!it.text) { mg_logf("[cmd] cannot open %s", path); return; }
 
     MgCommand *curcmd = NULL;
     int ccap = 32;
@@ -203,7 +203,7 @@ static void parse_cmd(MgChar *ch, const char *path) {
 MgChar *mg_char_load(const char *defpath) {
     MgTextIter it;
     mg_text_open(&it, defpath);
-    if (!it.text) { fprintf(stderr, "[char] cannot open %s\n", defpath); return NULL; }
+    if (!it.text) { mg_logf("[char] cannot open %s", defpath); return NULL; }
 
     MgChar *ch = (MgChar*)calloc(1, sizeof(MgChar));
     strncpy(ch->dir, defpath, 500);
@@ -292,7 +292,7 @@ MgChar *mg_char_load(const char *defpath) {
         ch->snd = mg_snd_load(p);
         free(p);
     }
-    fprintf(stderr, "[char] %s: %d states, %d commands, %d sprites, %d anims\n",
+    mg_logf("[char] %s: %d states, %d commands, %d sprites, %d anims",
             ch->name, ch->nstates, ch->ncommands,
             ch->sff ? ch->sff->nsprites : 0, ch->air ? ch->air->nanims : 0);
     return ch;

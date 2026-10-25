@@ -23,6 +23,9 @@ int mg_file_exists(const char *path);
 char *mg_read_file(const char *path, long *out_len);
 char *mg_path_join(const char *dir, const char *name);
 void mg_path_fix(char *s);
+/* portable log: stderr on PC, SDL_Log (-> logcat, tag "SDL/APP") on Android.
+ * Defined in util.c for non-Android builds, in platform_sdl.c for Android. */
+void mg_logf(const char *fmt, ...);
 
 /* ---------------- SFF ---------------- */
 typedef struct {

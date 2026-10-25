@@ -3,6 +3,20 @@
  */
 #include "mugen.h"
 #include <SDL.h>
+#include <stdarg.h>
+
+#ifdef __ANDROID__
+/* Engine diagnostics -> logcat (tag "SDL/APP"). Bionic apps have no usable
+ * stderr, so util.c skips its fprintf version of mg_logf on Android. */
+void mg_logf(const char *fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    SDL_Log("%s", buf);
+}
+#endif
 
 static SDL_Window *g_win = NULL;
 static SDL_Renderer *g_ren = NULL;
@@ -122,7 +136,7 @@ static void fatal_error_loop(const char *line1, const char *line2, const char *l
         draw_builtin_text_centered(line2, g_fbh / 2 - 20, 3, 0xFFE0E0);
         draw_builtin_text_centered(line3, g_fbh / 2 + 40, 2, 0xC0C0C0);
         if ((frame / 30) % 2 == 0)
-            draw_builtin_text_centered("CHECK LOGCAT TAG: MUGEN / SDL", g_fbh / 2 + 130, 2, 0x909090);
+            draw_builtin_text_centered("CHECK LOGCAT TAG: SDL/APP", g_fbh / 2 + 130, 2, 0x909090);
         SDL_RenderPresent(g_ren);
         SDL_Delay(1000 / 30);
         frame++;
@@ -448,7 +462,7 @@ static void poll_events(void) {
 
 int main(int argc, char *argv[]) {
     (void)argc; (void)argv;
-    SDL_Log("MUGEN Android port v0.1.1 starting");
+    SDL_Log("MUGEN Android port v0.1.2 starting");
 
     /* Video is required; audio/joystick are best-effort (a failed audio
      * subsystem must not kill the game like it did before). */
@@ -522,7 +536,9 @@ int main(int argc, char *argv[]) {
             (int)(SDL_GetTicks() - load_t0), g_game.nchars, g_game.nstages,
             (void*)g_game.fonts[0], (void*)g_game.fonts[1]);
 
-    /* Hard data failure -> visible error, not a fake black "title screen" */
+    /* Hard data failure -> visible error, not a fake black "title screen".
+     * (v0.1.1 hit this on real devices: a path-join bug made every data file
+     * open fail even though the data WAS extracted correctly — see util.c.) */
     if (g_game.nchars == 0 || g_game.nstages == 0) {
         char l3[256];
         snprintf(l3, sizeof(l3), "DIR: %s", gamedir);
