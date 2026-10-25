@@ -9,6 +9,127 @@ static SDL_Renderer *g_ren = NULL;
 static int g_fbw = 1280, g_fbh = 720;
 static SDL_Texture *g_target = NULL;
 
+/* ---------------- built-in 5x7 font (status / error screens) ----------------
+ * Independent of game data: must render even when the mugen/ tree is missing
+ * so failures are never an invisible black screen. */
+static const uint8_t FONT5X7[128][7] = {
+    ['A'] = {0x0E,0x11,0x11,0x1F,0x11,0x11,0x11},
+    ['B'] = {0x1E,0x11,0x11,0x1E,0x11,0x11,0x1E},
+    ['C'] = {0x0E,0x11,0x10,0x10,0x10,0x11,0x0E},
+    ['D'] = {0x1E,0x11,0x11,0x11,0x11,0x11,0x1E},
+    ['E'] = {0x1F,0x10,0x10,0x1E,0x10,0x10,0x1F},
+    ['F'] = {0x1F,0x10,0x10,0x1E,0x10,0x10,0x10},
+    ['G'] = {0x0E,0x11,0x10,0x17,0x11,0x11,0x0F},
+    ['H'] = {0x11,0x11,0x11,0x1F,0x11,0x11,0x11},
+    ['I'] = {0x0E,0x04,0x04,0x04,0x04,0x04,0x0E},
+    ['J'] = {0x07,0x02,0x02,0x02,0x02,0x12,0x0C},
+    ['K'] = {0x11,0x12,0x14,0x18,0x14,0x12,0x11},
+    ['L'] = {0x10,0x10,0x10,0x10,0x10,0x10,0x1F},
+    ['M'] = {0x11,0x1B,0x15,0x15,0x11,0x11,0x11},
+    ['N'] = {0x11,0x19,0x15,0x13,0x11,0x11,0x11},
+    ['O'] = {0x0E,0x11,0x11,0x11,0x11,0x11,0x0E},
+    ['P'] = {0x1E,0x11,0x11,0x1E,0x10,0x10,0x10},
+    ['Q'] = {0x0E,0x11,0x11,0x11,0x15,0x12,0x0D},
+    ['R'] = {0x1E,0x11,0x11,0x1E,0x14,0x12,0x11},
+    ['S'] = {0x0F,0x10,0x10,0x0E,0x01,0x01,0x1E},
+    ['T'] = {0x1F,0x04,0x04,0x04,0x04,0x04,0x04},
+    ['U'] = {0x11,0x11,0x11,0x11,0x11,0x11,0x0E},
+    ['V'] = {0x11,0x11,0x11,0x11,0x11,0x0A,0x04},
+    ['W'] = {0x11,0x11,0x11,0x15,0x15,0x1B,0x11},
+    ['X'] = {0x11,0x11,0x0A,0x04,0x0A,0x11,0x11},
+    ['Y'] = {0x11,0x11,0x0A,0x04,0x04,0x04,0x04},
+    ['Z'] = {0x1F,0x01,0x02,0x04,0x08,0x10,0x1F},
+    ['0'] = {0x0E,0x11,0x13,0x15,0x19,0x11,0x0E},
+    ['1'] = {0x04,0x0C,0x04,0x04,0x04,0x04,0x0E},
+    ['2'] = {0x0E,0x11,0x01,0x06,0x08,0x10,0x1F},
+    ['3'] = {0x1F,0x02,0x04,0x02,0x01,0x11,0x0E},
+    ['4'] = {0x02,0x06,0x0A,0x12,0x1F,0x02,0x02},
+    ['5'] = {0x1F,0x10,0x1E,0x01,0x01,0x11,0x0E},
+    ['6'] = {0x06,0x08,0x10,0x1E,0x11,0x11,0x0E},
+    ['7'] = {0x1F,0x01,0x02,0x04,0x08,0x08,0x08},
+    ['8'] = {0x0E,0x11,0x11,0x0E,0x11,0x11,0x0E},
+    ['9'] = {0x0E,0x11,0x11,0x0F,0x01,0x02,0x0C},
+    [' '] = {0,0,0,0,0,0,0},
+    ['.'] = {0,0,0,0,0,0x0C,0x0C},
+    [','] = {0,0,0,0,0x0C,0x04,0x08},
+    ['-'] = {0,0,0,0x1F,0,0,0},
+    ['_'] = {0,0,0,0,0,0,0x1F},
+    [':'] = {0,0x06,0x06,0,0x06,0x06,0},
+    ['/'] = {0x01,0x01,0x02,0x04,0x08,0x10,0x10},
+    ['!'] = {0x04,0x04,0x04,0x04,0x04,0x00,0x04},
+    ['?'] = {0x0E,0x11,0x01,0x06,0x04,0x00,0x04},
+    ['+'] = {0,0x04,0x04,0x1F,0x04,0x04,0},
+    ['('] = {0x02,0x04,0x08,0x08,0x08,0x04,0x02},
+    [')'] = {0x08,0x04,0x02,0x02,0x02,0x04,0x08},
+    ['\''] = {0x04,0x04,0x08,0,0,0,0},
+};
+
+static int builtin_text_w(const char *s, int scale) {
+    int w = 0;
+    for (; *s; s++) w += (6 * scale);
+    return w - scale;
+}
+
+static void draw_builtin_text(const char *s, int x, int y, int scale, uint32_t rgb) {
+    uint8_t r = (rgb >> 16) & 0xFF, g = (rgb >> 8) & 0xFF, b = rgb & 0xFF;
+    int cx = x;
+    for (; *s; s++) {
+        unsigned char ch = (unsigned char)*s;
+        if (ch < 128) {
+            const uint8_t *gl = FONT5X7[ch];
+            for (int yy = 0; yy < 7; yy++)
+                for (int xx = 0; xx < 5; xx++)
+                    if (gl[yy] & (0x10 >> xx))
+                        mg_fill_rect(cx + xx * scale, y + yy * scale, scale, scale, r, g, b, 255);
+        }
+        cx += 6 * scale;
+    }
+}
+
+static void draw_builtin_text_centered(const char *s, int y, int scale, uint32_t rgb) {
+    draw_builtin_text(s, g_fbw / 2 - builtin_text_w(s, scale) / 2, y, scale, rgb);
+}
+
+/* Show a status frame immediately (before engine init) so the app is never a
+ * silent black screen while data loads. */
+static void present_loading_frame(int dots) {
+    SDL_SetRenderDrawColor(g_ren, 12, 16, 24, 255);
+    SDL_RenderClear(g_ren);
+    draw_builtin_text_centered("M.U.G.E.N ANDROID PORT", g_fbh / 2 - 90, 5, 0xFFB040);
+    draw_builtin_text_centered("LOADING, PLEASE WAIT", g_fbh / 2 + 10, 3, 0xE0E0E0);
+    char dotsbuf[8] = {0};
+    for (int i = 0; i < dots % 4; i++) dotsbuf[i] = '.';
+    draw_builtin_text_centered(dotsbuf, g_fbh / 2 + 60, 3, 0x808080);
+    SDL_RenderPresent(g_ren);
+    /* keep Android happy: pump the event queue during the load phase */
+    SDL_Event e;
+    while (SDL_PollEvent(&e)) { if (e.type == SDL_QUIT) g_game.running = 0; }
+}
+
+/* Fatal data error: stay visible instead of a black screen. Never returns
+ * (until the user quits). */
+static void fatal_error_loop(const char *line1, const char *line2, const char *line3) {
+    SDL_Log("FATAL: %s | %s | %s", line1, line2, line3);
+    int frame = 0;
+    while (g_game.running) {
+        SDL_Event e;
+        while (SDL_PollEvent(&e)) {
+            if (e.type == SDL_QUIT || e.type == SDL_APP_TERMINATING) g_game.running = 0;
+        }
+        SDL_SetRenderDrawColor(g_ren, 48, 8, 8, 255);
+        SDL_RenderClear(g_ren);
+        draw_builtin_text_centered(line1, g_fbh / 2 - 120, 4, 0xFF6060);
+        draw_builtin_text_centered(line2, g_fbh / 2 - 20, 3, 0xFFE0E0);
+        draw_builtin_text_centered(line3, g_fbh / 2 + 40, 2, 0xC0C0C0);
+        if ((frame / 30) % 2 == 0)
+            draw_builtin_text_centered("CHECK LOGCAT TAG: MUGEN / SDL", g_fbh / 2 + 130, 2, 0x909090);
+        SDL_RenderPresent(g_ren);
+        SDL_Delay(1000 / 30);
+        frame++;
+    }
+}
+
+
 /* ---------------- sprite texture cache ---------------- */
 #define TEXCACHE_MAX 2048
 typedef struct { MgSprite *spr; SDL_Texture *tex; } TexCache;
@@ -199,6 +320,10 @@ static TouchBtn g_touchbtns[] = {
     { 640, 680, 40, BTN_START, "ST" },
 };
 
+/* finger -> button binding for multitouch (slots free when btn_idx < 0) */
+typedef struct { SDL_FingerID fid; int btn_idx; } FingerSlot;
+static FingerSlot g_fingers[16];
+
 static void handle_touch(SDL_Event *e) {
     int x = 0, y = 0;
     if (e->type == SDL_FINGERDOWN || e->type == SDL_FINGERMOTION || e->type == SDL_FINGERUP) {
@@ -210,36 +335,43 @@ static void handle_touch(SDL_Event *e) {
         x = e->button.x; y = e->button.y;
     } else return;
 
-    /* map window coords to our virtual layout coords */
-    double sx = (double)x / g_fbw, sy = (double)y / g_fbh;
-    int lx = (int)(sx * 1280), ly = (int)(sy * 720);
+    /* map window pixels -> 1280x720 logical coords (letterboxed by SDL).
+     * The old code used raw window pixels, so buttons landed in the wrong
+     * place on every real device (window is never exactly 1280x720). */
+    int lx = x, ly = y;
+    {
+        float lgx = 0.0f, lgy = 0.0f;
+        SDL_RenderWindowToLogical(g_ren, (float)x, (float)y, &lgx, &lgy);
+        lx = (int)lgx; ly = (int)lgy;
+    }
 
-    static struct { SDL_FingerID fid; int btn_idx; } fingers[16];
-    if (e->type == SDL_FINGERDOWN) {
+    if (e->type == SDL_FINGERDOWN || e->type == SDL_MOUSEBUTTONDOWN) {
         for (int i = 0; i < (int)(sizeof(g_touchbtns)/sizeof(g_touchbtns[0])); i++) {
             TouchBtn *b = &g_touchbtns[i];
             int dx = lx - b->x, dy = ly - b->y;
             if (dx*dx + dy*dy <= b->r * b->r * 2) {
                 g_touchbuttons |= b->bit;
                 for (int f = 0; f < 16; f++)
-                    if (fingers[f].btn_idx == -1) { fingers[f].fid = e->tfinger.fingerId; fingers[f].btn_idx = i; break; }
+                    if (g_fingers[f].btn_idx < 0) {
+                        g_fingers[f].fid = e->tfinger.fingerId;
+                        g_fingers[f].btn_idx = i;
+                        break;
+                    }
                 return;
             }
         }
-    } else if (e->type == SDL_FINGERUP) {
+    } else if (e->type == SDL_FINGERUP || e->type == SDL_MOUSEBUTTONUP) {
+        SDL_FingerID fid = (e->type == SDL_FINGERUP) ? e->tfinger.fingerId : 1;
         for (int f = 0; f < 16; f++) {
-            if (fingers[f].fid == e->tfinger.fingerId) {
-                int idx = fingers[f].btn_idx;
-                if (idx >= 0) {
-                    g_touchbuttons &= ~g_touchbtns[idx].bit;
-                }
-                fingers[f].btn_idx = -1;
-                fingers[f].fid = 0;
-                return;
+            if (g_fingers[f].btn_idx >= 0 &&
+                (e->type == SDL_MOUSEBUTTONUP || g_fingers[f].fid == fid)) {
+                g_touchbuttons &= ~g_touchbtns[g_fingers[f].btn_idx].bit;
+                g_fingers[f].btn_idx = -1;
+                g_fingers[f].fid = 0;
+                if (e->type == SDL_FINGERUP) return;
             }
         }
     }
-    (void)y;
 }
 
 static void draw_touch_controls(void) {
@@ -299,6 +431,11 @@ static void poll_events(void) {
         }
         else if (e.type == SDL_FINGERDOWN || e.type == SDL_FINGERUP) handle_touch(&e);
         else if (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP) handle_touch(&e);
+        else if (e.type == SDL_APP_WILLENTERBACKGROUND || e.type == SDL_APP_DIDENTERBACKGROUND) {
+            /* release held buttons so nothing sticks after resume */
+            g_touchbuttons = 0;
+            for (int f = 0; f < 16; f++) { g_fingers[f].btn_idx = -1; g_fingers[f].fid = 0; }
+        }
     }
 }
 
@@ -311,10 +448,21 @@ static void poll_events(void) {
 
 int main(int argc, char *argv[]) {
     (void)argc; (void)argv;
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_JOYSTICK) != 0) {
-        SDL_Log("SDL_Init failed: %s", SDL_GetError());
+    SDL_Log("MUGEN Android port v0.1.1 starting");
+
+    /* Video is required; audio/joystick are best-effort (a failed audio
+     * subsystem must not kill the game like it did before). */
+    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+        SDL_Log("SDL_Init(VIDEO) failed: %s", SDL_GetError());
         return 1;
     }
+    if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0)
+        SDL_Log("audio disabled (%s)", SDL_GetError());
+    if (SDL_InitSubSystem(SDL_INIT_JOYSTICK) != 0)
+        SDL_Log("joystick disabled (%s)", SDL_GetError());
+
+    /* touch finger slots start free */
+    for (int f = 0; f < 16; f++) { g_fingers[f].btn_idx = -1; g_fingers[f].fid = 0; }
 
     SDL_DisplayMode dm;
     SDL_GetCurrentDisplayMode(0, &dm);
@@ -325,35 +473,64 @@ int main(int argc, char *argv[]) {
     g_win = SDL_CreateWindow("M.U.G.E.N", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
                              g_fbw, g_fbh, SDL_WINDOW_FULLSCREEN_DESKTOP);
     g_ren = SDL_CreateRenderer(g_win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    if (!g_ren) g_ren = SDL_CreateRenderer(g_win, -1, 0);
+    if (!g_ren) {
+        SDL_Log("accelerated renderer failed (%s), trying software", SDL_GetError());
+        g_ren = SDL_CreateRenderer(g_win, -1, SDL_RENDERER_SOFTWARE);
+    }
+    if (!g_ren) {
+        SDL_Log("FATAL: no renderer: %s", SDL_GetError());
+        return 1;
+    }
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
     SDL_RenderSetLogicalSize(g_ren, 1280, 720);
     g_fbw = 1280; g_fbh = 720;
 
-    /* audio */
+    /* audio device (non-fatal) */
     SDL_AudioSpec want;
     SDL_zero(want);
     want.freq = 22050; want.format = AUDIO_S16SYS; want.channels = 1;
     want.samples = 1024; want.callback = audio_cb;
     g_audiodev = SDL_OpenAudioDevice(NULL, 0, &want, &g_audiospec, 0);
     if (g_audiodev) SDL_PauseAudioDevice(g_audiodev, 0);
+    else SDL_Log("audio device unavailable: %s", SDL_GetError());
 
-    /* game dir: android assets extracted to internal storage */
+    /* First frame RIGHT NOW: never leave the user staring at a black screen,
+     * not even while data is still loading. */
+    g_game.running = 1;
+    present_loading_frame(0);
+
+    /* game dir: Android passes the extraction dir via argv[1] (see
+     * MainActivity.getArguments); fallback to SDL storage paths. */
     const char *gamedir = GAME_DIR_DEFAULT;
-    char dirbuf[512];
+    char dirbuf[512] = {0};
 #ifdef __ANDROID__
-    {
+    if (!(argc > 1 && argv[1] && argv[1][0])) {
         const char *base = SDL_AndroidGetExternalStoragePath();
         if (!base) base = SDL_AndroidGetInternalStoragePath();
         snprintf(dirbuf, sizeof(dirbuf), "%s/mugen", base);
-        gamedir = dirbuf;
-        SDL_Log("game dir: %s", gamedir);
     }
 #endif
-    if (argc > 1 && argv[1]) gamedir = argv[1];
+    if (argc > 1 && argv[1] && argv[1][0]) {
+        snprintf(dirbuf, sizeof(dirbuf), "%s", argv[1]);
+    }
+    if (dirbuf[0]) gamedir = dirbuf;
+    SDL_Log("game dir: %s", gamedir);
 
-    g_game.win_w = g_fbw; g_game.win_h = g_fbh;
+    Uint32 load_t0 = SDL_GetTicks();
     mg_engine_init(gamedir);
+    SDL_Log("engine init done in %dms: %d chars, %d stages, fonts %p/%p",
+            (int)(SDL_GetTicks() - load_t0), g_game.nchars, g_game.nstages,
+            (void*)g_game.fonts[0], (void*)g_game.fonts[1]);
+
+    /* Hard data failure -> visible error, not a fake black "title screen" */
+    if (g_game.nchars == 0 || g_game.nstages == 0) {
+        char l3[256];
+        snprintf(l3, sizeof(l3), "DIR: %s", gamedir);
+        fatal_error_loop("GAME DATA MISSING",
+                         "REINSTALL THE APK", l3);
+        SDL_Quit();
+        return 1;
+    }
 
     /* main loop: 60fps fixed timestep */
     Uint32 next_tick = SDL_GetTicks();

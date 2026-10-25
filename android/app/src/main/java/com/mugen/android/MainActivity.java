@@ -10,40 +10,72 @@ import java.io.OutputStream;
 
 public class MainActivity extends SDLActivity {
     private static final String TAG = "MUGEN";
-    private static boolean sGameDataReady = false;
+    /* Bump this when bundled data changes: forces re-extraction on upgrade. */
+    private static final String DATA_MARKER = ".mugen_v2";
+    /* Must exist after extraction, otherwise the payload is incomplete. */
+    private static final String DATA_PROBE = "data/fight.def";
+
+    private static volatile String sGameDir = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        // Extract bundled MUGEN data on first run (or when version bumps)
+        // Extract bundled MUGEN data BEFORE SDL starts (blocking: SDL_main
+        // must never race the extraction). Runs once; ~2s for 6 MB.
         extractGameData();
         super.onCreate(savedInstanceState);
     }
 
+    @Override
+    protected String[] getLibraries() {
+        return new String[]{ "game" };
+    }
+
     /**
-     * Copy assets/mugen/** to <external files>/mugen — the same folder layout
-     * as the PC version. Users can drop custom characters into mugen/chars/
-     * with any file manager.
+     * SDL_main receives this as argv[1], so the native side gets the exact
+     * directory we extracted to — no storage-path guessing in C (internal vs
+     * external fallback would otherwise mismatch SDL_AndroidGetExternalStoragePath).
+     */
+    @Override
+    protected String[] getArguments() {
+        String dir = sGameDir;
+        return dir != null ? new String[]{ dir } : new String[0];
+    }
+
+    /**
+     * Copy assets/mugen/** to <files>/mugen — the same folder layout as the PC
+     * version. Users can drop custom characters into mugen/chars/ with any
+     * file manager. Marker file + probe check guard against partial runs.
      */
     private void extractGameData() {
-        if (sGameDataReady) return;
+        if (sGameDir != null) return;
         try {
             File base = getExternalFilesDir(null);
             if (base == null) base = getFilesDir();
             File mugenDir = new File(base, "mugen");
-            File marker = new File(base, ".mugen_v1");
-            if (marker.exists() && mugenDir.isDirectory()) {
-                sGameDataReady = true;
+            File marker = new File(base, DATA_MARKER);
+            if (marker.isFile() && probeOk(mugenDir)) {
+                sGameDir = mugenDir.getAbsolutePath();
                 return;
             }
             Log.i(TAG, "Extracting MUGEN data to " + mugenDir.getAbsolutePath());
             long t0 = System.currentTimeMillis();
+            marker.delete();
             copyAssetDir("mugen", mugenDir);
+            if (!probeOk(mugenDir)) {
+                throw new IllegalStateException(
+                    "extraction incomplete: " + DATA_PROBE + " missing (assets broken?)");
+            }
             marker.createNewFile();
-            sGameDataReady = true;
+            sGameDir = mugenDir.getAbsolutePath();
             Log.i(TAG, "Data extracted in " + (System.currentTimeMillis() - t0) + "ms");
         } catch (Exception e) {
-            Log.e(TAG, "extract failed", e);
+            Log.e(TAG, "game data extraction failed", e);
+            // sGameDir stays null -> native side shows a visible error screen
         }
+    }
+
+    private static boolean probeOk(File mugenDir) {
+        return new File(mugenDir, DATA_PROBE).isFile();
     }
 
     private void copyAssetDir(String path, File dst) throws Exception {
@@ -57,19 +89,29 @@ public class MainActivity extends SDLActivity {
             if (sub != null && sub.length > 0) {
                 copyAssetDir(srcPath, dstFile);
             } else {
-                InputStream in = getAssets().open(srcPath);
-                OutputStream out = new FileOutputStream(dstFile);
-                byte[] buf = new byte[65536];
-                int n;
-                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-                out.close();
-                in.close();
+                copyAssetFile(srcPath, dstFile);
             }
         }
     }
 
-    @Override
-    protected String[] getLibraries() {
-        return new String[]{ "game" };
+    /**
+     * A childless asset entry can be a file OR an empty directory; getAssets()
+     * cannot tell them apart, so try to open it and fall back to mkdirs().
+     */
+    private void copyAssetFile(String srcPath, File dstFile) throws Exception {
+        InputStream in = null;
+        OutputStream out = null;
+        try {
+            in = getAssets().open(srcPath);
+            out = new FileOutputStream(dstFile);
+            byte[] buf = new byte[65536];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+        } catch (java.io.FileNotFoundException e) {
+            dstFile.mkdirs(); // empty directory kept by aapt
+        } finally {
+            if (out != null) try { out.close(); } catch (Exception ignored) { }
+            if (in != null) try { in.close(); } catch (Exception ignored) { }
+        }
     }
 }

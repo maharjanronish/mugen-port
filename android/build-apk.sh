@@ -71,9 +71,12 @@ rm -rf libpkg && mkdir -p libpkg/lib
 cp -r ../libs/*/ libpkg/lib/
 (cd libpkg && zip -q -r ../aligned.apk lib)
 rm -rf libpkg
-# bundled game data
-cp -r ../src/main/assets assetstmp
-(cd assetstmp && zip -q -r ../aligned.apk mugen)
+# bundled game data.
+# NOTE: AssetManager ONLY sees entries under the "assets/" prefix inside the APK.
+# (zipping the bare "mugen/" dir put files at APK root -> app saw zero assets.)
+rm -rf assetstmp && mkdir -p assetstmp/assets
+cp -R ../src/main/assets/. assetstmp/assets/
+(cd assetstmp && zip -q -r ../aligned.apk assets)
 rm -rf assetstmp
 
 echo "=== 6. zipalign ==="

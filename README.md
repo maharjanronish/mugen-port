@@ -11,11 +11,13 @@ directly on Android via SDL2.
 - Gradle-free build (ndk-build + aapt2/d8/apksigner), fully scriptable
 - LAN / Wi-Fi-hotspot netplay scaffolded (`engine/net.c`, experimental)
 
-Current release: **v0.1.0** (`releases/MUGEN-v0.1.0.apk`, ~4.7 MB) — playable fight MVP.
+Current release: **v0.1.1** (`releases/MUGEN-v0.1.1.apk`, ~4.7 MB) — playable fight MVP.
+
+v0.1.1 fixes the black-screen-on-launch bug of v0.1.0 (game data was packaged outside `assets/`, so the engine found an empty data dir), forces landscape orientation, and adds a visible loading screen + error screen.
 
 ## Install
 
-1. Download `releases/MUGEN-v0.1.0.apk`, copy to your phone, install (allow "unknown sources").
+1. Download `releases/MUGEN-v0.1.1.apk`, copy to your phone, install (allow "unknown sources").
 2. First launch extracts the bundled MUGEN data to
    `Android/data/com.mugen.android/files/mugen/`
 3. Play! Default roster: Kung Fu Man + Kung Fu Man 720 on the Training Room stage.
