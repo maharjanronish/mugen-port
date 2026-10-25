@@ -50,6 +50,7 @@ void mg_spawn_explod(MgEntity *en, MgStateCtl *c) {
             int vv[2] = {0,0}; mg_parse_ints(c->pvals[i], vv, 2); px = vv[0]; py = vv[1];
         }
     }
+    double cs = en->coord_scale > 0 ? en->coord_scale : 1.0;
     for (int i = 0; i < MG_MAX_EXPLODS; i++) {
         if (!g_explods[i].active) {
             MgExplod *ex = &g_explods[i];
@@ -57,8 +58,8 @@ void mg_spawn_explod(MgEntity *en, MgStateCtl *c) {
             ex->active = 1;
             ex->anim = g_fightfx_air ? mg_air_get(g_fightfx_air, anim) : NULL;
             ex->spr = g_fightfx_sff ? mg_sff_get(g_fightfx_sff, gid, num) : NULL;
-            ex->pos_x = (int)(en->pos_x + (en->facing > 0 ? px : -px));
-            ex->pos_y = (int)(en->pos_y - py);
+            ex->pos_x = (int)(en->pos_x + (en->facing > 0 ? px : -px) * cs);
+            ex->pos_y = (int)(en->pos_y - py * cs);
             ex->anim_time = 0;
             for (int q = 0; q < c->nparams; q++)
                 if (mg_str_ieq(c->pnames[q], "removetime")) ex->removetime = mg_geti(c->pvals[q], -2);
@@ -129,9 +130,10 @@ void mg_spawn_projectile(MgEntity *en, MgStateCtl *c) {
             memset(p, 0, sizeof(*p));
             p->active = 1;
             p->owner_idx = (int)(en - g_entities);
-            p->pos_x = en->pos_x + en->facing * 20;
-            p->pos_y = en->pos_y - 40;
-            p->vel_x = en->facing * 4.0;
+            double cs = en->coord_scale > 0 ? en->coord_scale : 1.0;
+            p->pos_x = en->pos_x + en->facing * 20 * cs;
+            p->pos_y = en->pos_y - 40 * cs;
+            p->vel_x = en->facing * 4.0 * cs;
             p->damage = 50;
             int gid = 0, num = 0, anim = -1;
             for (int q = 0; q < c->nparams; q++) {
@@ -139,7 +141,7 @@ void mg_spawn_projectile(MgEntity *en, MgStateCtl *c) {
                 if (mg_str_ieq(c->pnames[q], "projremovetime")) p->removetime = mg_geti(c->pvals[q], 300);
                 if (mg_str_ieq(c->pnames[q], "velocity")) {
                     double vv[2] = {4,0}; mg_parse_floats(c->pvals[q], vv, 2);
-                    p->vel_x = en->facing * vv[0]; p->vel_y = vv[1];
+                    p->vel_x = en->facing * vv[0] * cs; p->vel_y = vv[1] * cs;
                 }
                 if (mg_str_ieq(c->pnames[q], "projanim")) anim = mg_geti(c->pvals[q], -1);
                 if (mg_str_ieq(c->pnames[q], "projspr")) {
@@ -148,8 +150,8 @@ void mg_spawn_projectile(MgEntity *en, MgStateCtl *c) {
                 if (mg_str_ieq(c->pnames[q], "damage")) p->damage = mg_geti(c->pvals[q], 50);
                 if (mg_str_ieq(c->pnames[q], "offset")) {
                     double vv[2] = {0,0}; mg_parse_floats(c->pvals[q], vv, 2);
-                    p->pos_x = en->pos_x + en->facing * vv[0];
-                    p->pos_y = en->pos_y - vv[1];
+                    p->pos_x = en->pos_x + en->facing * vv[0] * cs;
+                    p->pos_y = en->pos_y - vv[1] * cs;
                 }
             }
             p->anim = en->ch->air ? mg_air_get(en->ch->air, anim) : NULL;
@@ -181,9 +183,12 @@ void mg_apply_target_sctrl(MgEntity *en, const char *type, MgStateCtl *c) {
     } else if (mg_str_ieq(type, "targetfacing")) {
         p2->facing = en->facing;
     } else if (mg_str_ieq(type, "targetvelset")) {
+        /* values authored in the ATTACKER's localcoord -> victim units */
+        double uconv = (en->coord_scale > 0 ? en->coord_scale : 1.0)
+                     / (p2->coord_scale > 0 ? p2->coord_scale : 1.0);
         for (int i = 0; i < c->nparams; i++) {
-            if (mg_str_ieq(c->pnames[i], "x")) p2->vel_x = mg_getf(c->pvals[i], p2->vel_x);
-            if (mg_str_ieq(c->pnames[i], "y")) p2->vel_y = mg_getf(c->pvals[i], p2->vel_y);
+            if (mg_str_ieq(c->pnames[i], "x")) p2->vel_x = mg_getf(c->pvals[i], p2->vel_x) * uconv;
+            if (mg_str_ieq(c->pnames[i], "y")) p2->vel_y = mg_getf(c->pvals[i], p2->vel_y) * uconv;
         }
     } else if (mg_str_ieq(type, "targetbind")) {
         /* simplified: keep victim at attacker side */
@@ -193,22 +198,23 @@ void mg_apply_target_sctrl(MgEntity *en, const char *type, MgStateCtl *c) {
                 int vv[2] = {0,0}; mg_parse_ints(c->pvals[i], vv, 2); x = vv[0]; y = vv[1];
             }
         }
-        p2->pos_x = en->pos_x + en->facing * x;
-        p2->pos_y = en->pos_y - y;
+        p2->pos_x = en->pos_x + en->facing * x * (en->coord_scale > 0 ? en->coord_scale : 1.0);
+        p2->pos_y = en->pos_y - y * (en->coord_scale > 0 ? en->coord_scale : 1.0);
     }
 }
 
 /* ---------------- physics ---------------- */
 static void apply_physics(MgEntity *en) {
     MgChar *ch = en->ch;
+    double cs = en->coord_scale > 0 ? en->coord_scale : 1.0;
     if (en->pos_freeze) { en->vel_x = 0; en->vel_y = 0; return; }
 
     if (en->physics == 'A') {
-        en->vel_y += mg_char_const(ch, "movement.yaccel", 0.44);
-        if (en->vel_y > 8.0) en->vel_y = 8.0;
+        en->vel_y += mg_char_const(ch, "movement.yaccel", 0.44) * cs;
+        if (en->vel_y > 8.0 * cs) en->vel_y = 8.0 * cs;
     } else if (en->physics == 'S' || en->physics == 'C') {
         if (en->vel_y < 0) {
-            en->vel_y += mg_char_const(ch, "data.yaccel", 0.44);
+            en->vel_y += mg_char_const(ch, "data.yaccel", 0.44) * cs;
         } else {
             /* ground friction */
             double fric = (en->physics == 'C') ?
@@ -224,9 +230,9 @@ static void apply_physics(MgEntity *en) {
             en->vel_y = 0;
         }
     }
-    /* apply velocity */
-    en->pos_x += en->vel_x;
-    en->pos_y += en->vel_y;
+    /* apply velocity (vel is in char-local units: convert to world) */
+    en->pos_x += en->vel_x * cs;
+    en->pos_y += en->vel_y * cs;
 
     /* ground: y >= 0 means below floor */
     if (en->pos_y >= 0 && en->vel_y >= 0 && en->statetype != 'A') {
@@ -251,10 +257,12 @@ static int rects_overlap(double ax1, double ay1, double ax2, double ay2,
 }
 
 static double ent_front(MgEntity *en) {
-    return en->pos_x + en->facing * mg_char_const(en->ch, "size.ground.front", 16);
+    return en->pos_x + en->facing * mg_char_const(en->ch, "size.ground.front", 16)
+           * (en->coord_scale > 0 ? en->coord_scale : 1.0);
 }
 static double ent_back(MgEntity *en) {
-    return en->pos_x - en->facing * mg_char_const(en->ch, "size.ground.back", 12);
+    return en->pos_x - en->facing * mg_char_const(en->ch, "size.ground.back", 12)
+           * (en->coord_scale > 0 ? en->coord_scale : 1.0);
 }
 
 static void do_hit(MgEntity *att, MgEntity *vic, int guarded) {
@@ -306,7 +314,8 @@ static void apply_hit(MgEntity *att, MgEntity *vic) {
     /* hitdef active only during movetype A */
     if (att->movetype != 'A') return;
 
-    /* attacker clsn1 vs victim clsn2 */
+    /* attacker clsn1 vs victim clsn2 (boxes already scaled to world units
+     * by mg_update_clsn using each entity's coord_scale) */
     double a1 = 1e9, a2 = -1e9, b1 = 1e9, b2 = -1e9;
     for (int i = 0; i < att->nclsn1; i++) {
         MgClsn *cl = &att->clsn1[i];
@@ -345,7 +354,7 @@ static void apply_hit(MgEntity *att, MgEntity *vic) {
     if (vic->special_noairguard && vic->statetype == 'A') can_guard = 0;
 
     double spark_x = (ent_front(att) + ent_back(vic)) / 2;
-    double spark_y = vic->pos_y - mg_char_const(vic->ch, "size.mid.pos.y", -60) * 0 - 60;
+    double spark_y = vic->pos_y - 60.0 * (vic->coord_scale > 0 ? vic->coord_scale : 1.0);
 
     if (can_guard) {
         /* GUARD */
@@ -360,10 +369,13 @@ static void apply_hit(MgEntity *att, MgEntity *vic) {
         att->guard_count++;
         vic->power += 5;   /* guard power gain */
         att->power += att->hitdef.power_add > 0 ? 0 : 0;
-        /* guard pushback */
+        /* guard pushback (hitdef velocities are in ATTACKER local units:
+         * convert to victim-local before storing into victim's vel) */
         double gv = att->hitdef.guard_velocity_x;
         if (gv == 0) gv = att->hitdef.ground_velocity_x * 0.5;
-        vic->vel_x = -vic->facing * fabs(gv);
+        double uconv = (att->coord_scale > 0 ? att->coord_scale : 1.0)
+                     / (vic->coord_scale > 0 ? vic->coord_scale : 1.0);
+        vic->vel_x = -vic->facing * fabs(gv) * uconv;
         vic->vel_y = 0;
         /* guard spark + sound */
         mg_spawn_hitspark((int)spark_x, (int)spark_y, 1);
@@ -395,17 +407,20 @@ static void apply_hit(MgEntity *att, MgEntity *vic) {
         if (att->power > att->powermax) att->power = att->powermax;
         vic->power += 8;
 
-        /* gethitvars */
-        vic->gethit.xvel = -vic->facing * fabs(att->hitdef.ground_velocity_x);
+        /* gethitvars: velocities defined by the ATTACKER's CNS -> convert
+         * into VICTIM-local units so hitvelset applies them consistently */
+        double uconv = (att->coord_scale > 0 ? att->coord_scale : 1.0)
+                     / (vic->coord_scale > 0 ? vic->coord_scale : 1.0);
+        vic->gethit.xvel = -vic->facing * fabs(att->hitdef.ground_velocity_x) * uconv;
         if (vic->statetype == 'A') {
-            vic->gethit.xvel = -vic->facing * fabs(att->hitdef.air_velocity_x);
-            vic->gethit.yvel = att->hitdef.air_velocity_y;
+            vic->gethit.xvel = -vic->facing * fabs(att->hitdef.air_velocity_x) * uconv;
+            vic->gethit.yvel = att->hitdef.air_velocity_y * uconv;
         } else if (vic->statetype == 'L') {
-            vic->gethit.xvel = -vic->facing * fabs(att->hitdef.down_velocity_x);
-            vic->gethit.yvel = att->hitdef.down_velocity_y;
+            vic->gethit.xvel = -vic->facing * fabs(att->hitdef.down_velocity_x) * uconv;
+            vic->gethit.yvel = att->hitdef.down_velocity_y * uconv;
         } else {
-            vic->gethit.xvel = -vic->facing * fabs(att->hitdef.ground_velocity_x);
-            vic->gethit.yvel = att->hitdef.ground_velocity_y;
+            vic->gethit.xvel = -vic->facing * fabs(att->hitdef.ground_velocity_x) * uconv;
+            vic->gethit.yvel = att->hitdef.ground_velocity_y * uconv;
         }
         vic->gethit.fall_fall = att->hitdef.fall_fall;
         vic->gethit.hitshaketime_left = att->hitdef.pausetime > 0 ? (int)att->hitdef.pausetime : 10;
@@ -474,6 +489,12 @@ void mg_fight_start(void) {
     MgStage *st = g_game.stages[g_game.selected_stage];
     g_game.world_w = (int)st->localcoord_w;
     g_game.world_h = (int)st->localcoord_h;
+    /* world->screen uniform scale (by width, classic MUGEN widescreen crop).
+     * v0.1.x bug: this was never set on Android (only the PC test harnesses
+     * set it), so world_scale stayed 0.0 -> world_to_screen returned (0,0)
+     * for everything and sprites fell back to native size: tiny characters
+     * piled in the top-left corner. */
+    g_game.world_scale = (double)g_game.win_w / (double)(g_game.world_w > 0 ? g_game.world_w : MG_DEFAULT_W);
     g_game.round_no = 1;
     g_game.rounds_won[0] = g_game.rounds_won[1] = 0;
     g_game.announce_timer = 0;
@@ -482,6 +503,8 @@ void mg_fight_start(void) {
         MgEntity *en = &g_entities[i];
         memset(en, 0, sizeof(*en));
         en->ch = g_game.chars[g_game.selected[i]];
+        en->coord_scale = (g_game.world_h > 0 && en->ch->localcoord_h > 0)
+            ? (double)g_game.world_h / (double)en->ch->localcoord_h : 1.0;
         en->alive = 1;
         en->player_no = i;
         en->teamside = i + 1;
@@ -630,7 +653,8 @@ void mg_fight_frame(void) {
         en->inguarddist = 0;
         if (p2 && p2->attacking && p2->movetype == 'A') {
             double d = fabs(p2->pos_x - en->pos_x);
-            double gd = mg_char_const(p2->ch, "size.attack.dist", 160);
+            double gd = mg_char_const(p2->ch, "size.attack.dist", 160)
+                      * (p2->coord_scale > 0 ? p2->coord_scale : 1.0);
             if (d < gd) en->inguarddist = 1;
         }
         /* gethit timers decay */
@@ -704,8 +728,10 @@ void mg_fight_frame(void) {
                     double dmg = p->damage * 100.0 / mg_char_const(vic->ch, "data.defence", 100);
                     vic->life -= (int)dmg;
                     if (vic->life < 0) vic->life = 0;
-                    vic->gethit.xvel = -vic->facing * 3;
-                    vic->gethit.yvel = -4;
+                    /* projectile knockback is in world units -> victim-local */
+                    double vcs = vic->coord_scale > 0 ? vic->coord_scale : 1.0;
+                    vic->gethit.xvel = -vic->facing * 3 / vcs;
+                    vic->gethit.yvel = -4 / vcs;
                     vic->gethit.fall_fall = 1;
                     mg_change_state(vic, 5030, -1, 0);
                     vic->movetype = 'H';
@@ -779,9 +805,16 @@ static double stage_zoffset(void) {
     MgStage *st = g_game.stages[g_game.selected_stage];
     return st ? st->zoffset : g_game.world_h;
 }
+/* vertical anchor: 4:3 worlds on a 16:9 window are cropped from the top
+ * (bottom-anchored, so the fight floor is always on screen); taller-than-
+ * screen worlds are centered (letterbox). */
+static double world_yoff(void) {
+    double off = g_game.win_h - g_game.world_h * g_game.world_scale;
+    return off > 0 ? off * 0.5 : off;
+}
 static void world_to_screen(double wx, double wy, int *sx, int *sy) {
     *sx = (int)((wx - g_game.camera_x) * g_game.world_scale);
-    *sy = (int)((stage_zoffset() + wy - g_game.camera_y) * g_game.world_scale);
+    *sy = (int)((stage_zoffset() + wy - g_game.camera_y) * g_game.world_scale + world_yoff());
 }
 
 void mg_render_entity(MgEntity *en) {
@@ -790,15 +823,17 @@ void mg_render_entity(MgEntity *en) {
     MgChar *ch = en->ch;
     MgSprite *spr = mg_sff_get(ch->sff, f->group, f->number);
     if (!spr) return;
-    double scale = g_game.world_scale * ch->pal_scale;
+    double scale = g_game.world_scale * (en->coord_scale > 0 ? en->coord_scale : 1.0);
     int flip = (en->facing < 0) ? !f->flip_h : f->flip_h;
     int sx, sy;
     world_to_screen(en->pos_x, en->pos_y, &sx, &sy);
-    int dx = (int)(sx - (f->xoff + spr->axis_x) * scale * (en->facing < 0 ? -1 : 1) - (en->facing < 0 ? spr->w * scale : 0));
-    int dy = (int)(sy - (f->yoff + spr->axis_y) * scale - spr->h * scale);
-    /* simpler: draw aligned to axis */
-    dx = (int)(sx - ((en->facing < 0 ? spr->w - (f->xoff + spr->axis_x) : (f->xoff + spr->axis_x)) * scale));
-    dy = (int)(sy - (f->yoff + spr->axis_y) * scale - spr->h * scale);
+    /* MUGEN axis convention: the SFF axis sits at the character's FEET
+     * (Clsn y=0 is the bottom), so the sprite top-left is
+     * pos - (anim offset + axis) — NOT another sprite-height below that.
+     * v0.1.x subtracted spr->h*scale too, throwing every character far
+     * above the floor. */
+    int dx = (int)(sx - ((en->facing < 0 ? spr->w - (f->xoff + spr->axis_x) : (f->xoff + spr->axis_x)) * scale));
+    int dy = (int)(sy - (f->yoff + spr->axis_y) * scale);
     mg_render_sprite(spr, dx, dy, (int)(spr->w * scale), (int)(spr->h * scale), flip, f->flip_v, f->alpha_src, f->alpha_dst);
 }
 
@@ -813,7 +848,7 @@ void mg_render_stage(int layer) {
         if (!spr) continue;
         double scale = g_game.world_scale;
         int x = (int)((bg->x - g_game.camera_x * bg->delta_x) * scale);
-        int y = (int)((bg->y - g_game.camera_y * bg->delta_y) * scale);
+        int y = (int)((bg->y - g_game.camera_y * bg->delta_y) * scale + world_yoff());
         int w = (int)(spr->w * scale * bg->xscale);
         int h = (int)(spr->h * scale * bg->yscale);
         if (bg->tile_x) {

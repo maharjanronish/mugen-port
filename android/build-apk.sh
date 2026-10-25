@@ -9,8 +9,12 @@
 #
 # Produces: android/app/build/MUGEN.apk
 set -e
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Works both from the repo root layout (android/app) and when the script
+# lives next to app/ itself (this tree: mugen-android/app).
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -d "$SELF_DIR/android/app" ]; then ROOT="$SELF_DIR"; else ROOT="$(dirname "$SELF_DIR")"; fi
 APP="$ROOT/android/app"
+[ -d "$APP" ] || APP="$SELF_DIR/app"
 TOOLS_DIR="${TOOLS_DIR:-$HOME/mugen-tools}"
 JDK="${JDK:-$TOOLS_DIR/jdk}"
 
@@ -48,8 +52,8 @@ echo "=== 2. link resources + manifest ==="
     --manifest src/main/AndroidManifest.xml \
     --min-sdk-version 26 \
     --target-sdk-version 28 \
-    --version-code 3 \
-    --version-name 0.1.2 \
+    --version-code 4 \
+    --version-name 0.2.0 \
     --java build/gen \
     --auto-add-overlay \
     build/res.zip

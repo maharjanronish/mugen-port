@@ -1,5 +1,6 @@
 /* game.c — engine init, select screen, title, victory, game flow */
 #include "mugen.h"
+#include <dirent.h>
 
 /* globals live in state.c: g_game, g_entities, g_nentities */
 extern MgGame g_game;
@@ -117,15 +118,22 @@ void mg_load_select(void) {
     }
     free(text);
 
-    /* stages: scan stages/*.def */
+    /* stages: scan every *.def under stages/ (custom data folders name
+     * stages freely — the old hardcoded "stage0.def" missed them all) */
     char stagesdir[600];
     snprintf(stagesdir, sizeof(stagesdir), "%s/stages", g_game.base_dir);
-    const char *stagefiles[] = {"stage0.def"};
-    for (int i = 0; i < 1; i++) {
-        char sp[700];
-        snprintf(sp, sizeof(sp), "%s/%s", stagesdir, stagefiles[i]);
-        mg_path_fix(sp);
-        if (mg_file_exists(sp) && g_game.nstages < 16) {
+    mg_path_fix(stagesdir);
+    DIR *sdir = opendir(stagesdir);
+    if (sdir) {
+        struct dirent *de;
+        while ((de = readdir(sdir)) != NULL && g_game.nstages < 16) {
+            const char *nm = de->d_name;
+            size_t len = strlen(nm);
+            if (len < 5 || mg_str_ieq(nm + len - 4, ".def") == 0) continue;
+            char sp[700];
+            snprintf(sp, sizeof(sp), "%s/%s", stagesdir, nm);
+            mg_path_fix(sp);
+            if (!mg_file_exists(sp)) continue;
             MgStage *st = mg_stage_load(sp);
             if (st) {
                 g_game.stages[g_game.nstages] = st;
@@ -133,6 +141,7 @@ void mg_load_select(void) {
                 g_game.nstages++;
             }
         }
+        closedir(sdir);
     }
     mg_logf("[game] roster: %d chars, %d stages", g_game.nchars, g_game.nstages);
 }

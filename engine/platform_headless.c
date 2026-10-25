@@ -196,12 +196,8 @@ int main(int argc, char **argv) {
            g_game.chars[g_game.selected[1]]->name,
            g_game.stages[g_game.selected_stage]->name);
 
-    /* world scale */
-    g_game.world_scale = 3.0;
-    MgStage *st = g_game.stages[g_game.selected_stage];
-    g_game.world_w = (int)st->localcoord_w;
-    g_game.world_h = (int)st->localcoord_h;
-    g_game.camera_x = st->startx + st->boundleft + g_game.world_w/2 - g_game.world_w/2;
+    /* world setup is done by mg_fight_start (world_scale = win_w/world_w,
+     * per-entity coord_scale = world_h/char.localcoord_h) */
 
     /* run intro frames */
     for (int i = 0; i < 120; i++) {

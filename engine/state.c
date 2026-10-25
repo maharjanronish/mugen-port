@@ -188,8 +188,27 @@ void mg_update_clsn(MgEntity *en) {
     en->nclsn1 = en->nclsn2 = 0;
     if (!en->cur_anim || en->cur_anim->nframes == 0) return;
     MgAnimFrame *f = &en->cur_anim->frames[en->cur_frame_index];
-    if (f->nclsn1) { memcpy(en->clsn1, f->clsn1, f->nclsn1 * sizeof(MgClsn)); en->nclsn1 = f->nclsn1; }
-    if (f->nclsn2) { memcpy(en->clsn2, f->clsn2, f->nclsn2 * sizeof(MgClsn)); en->nclsn2 = f->nclsn2; }
+    /* AIR boxes are authored in the CHAR's localcoord: scale to world units
+     * (identity for 320x240 chars on a 320x240 stage). */
+    double cs = en->coord_scale > 0 ? en->coord_scale : 1.0;
+    if (f->nclsn1) {
+        for (int i = 0; i < f->nclsn1; i++) {
+            en->clsn1[i].x1 = (int32_t)(f->clsn1[i].x1 * cs);
+            en->clsn1[i].x2 = (int32_t)(f->clsn1[i].x2 * cs);
+            en->clsn1[i].y1 = (int32_t)(f->clsn1[i].y1 * cs);
+            en->clsn1[i].y2 = (int32_t)(f->clsn1[i].y2 * cs);
+        }
+        en->nclsn1 = f->nclsn1;
+    }
+    if (f->nclsn2) {
+        for (int i = 0; i < f->nclsn2; i++) {
+            en->clsn2[i].x1 = (int32_t)(f->clsn2[i].x1 * cs);
+            en->clsn2[i].x2 = (int32_t)(f->clsn2[i].x2 * cs);
+            en->clsn2[i].y1 = (int32_t)(f->clsn2[i].y1 * cs);
+            en->clsn2[i].y2 = (int32_t)(f->clsn2[i].y2 * cs);
+        }
+        en->nclsn2 = f->nclsn2;
+    }
 }
 
 /* ---------------- state change ---------------- */
@@ -212,7 +231,9 @@ void mg_change_state(MgEntity *en, int state_no, int anim, int ctrl) {
             if (an) { en->cur_anim = an; en->anim_time = 0; }
         }
         /* else: keep current anim */
-        en->vel_x = st->vel_x; en->vel_y = st->vel_y;
+        /* Statedef velocities are in char-local units */
+        double cs = en->coord_scale > 0 ? en->coord_scale : 1.0;
+        en->vel_x = st->vel_x * cs; en->vel_y = st->vel_y * cs;
         if (st->ctrl >= 0) en->ctrl = st->ctrl;
         else if (ctrl >= 0) en->ctrl = ctrl;
         /* reset hitdef */
@@ -307,13 +328,15 @@ static void exec_sctrl(MgEntity *en, MgStateCtl *c) {
     }
     else if (mg_str_ieq(t, "velset")) {
         const char *x = ctl_param(c, "x"), *y = ctl_param(c, "y");
-        if (x) en->vel_x = ctl_param_e(c, en, "x", en->vel_x);
-        if (y) en->vel_y = ctl_param_e(c, en, "y", en->vel_y);
+        double cs = en->coord_scale > 0 ? en->coord_scale : 1.0;
+        if (x) en->vel_x = ctl_param_e(c, en, "x", en->vel_x) * cs;
+        if (y) en->vel_y = ctl_param_e(c, en, "y", en->vel_y) * cs;
     }
     else if (mg_str_ieq(t, "veladd")) {
         const char *x = ctl_param(c, "x"), *y = ctl_param(c, "y");
-        if (x) en->vel_x += ctl_param_e(c, en, "x", 0);
-        if (y) en->vel_y += ctl_param_e(c, en, "y", 0);
+        double cs = en->coord_scale > 0 ? en->coord_scale : 1.0;
+        if (x) en->vel_x += ctl_param_e(c, en, "x", 0) * cs;
+        if (y) en->vel_y += ctl_param_e(c, en, "y", 0) * cs;
     }
     else if (mg_str_ieq(t, "velmul")) {
         const char *x = ctl_param(c, "x"), *y = ctl_param(c, "y");
@@ -322,13 +345,15 @@ static void exec_sctrl(MgEntity *en, MgStateCtl *c) {
     }
     else if (mg_str_ieq(t, "posset")) {
         const char *x = ctl_param(c, "x"), *y = ctl_param(c, "y");
-        if (x) en->pos_x = ctl_param_e(c, en, "x", en->pos_x);
-        if (y) en->pos_y = ctl_param_e(c, en, "y", en->pos_y);
+        double cs = en->coord_scale > 0 ? en->coord_scale : 1.0;
+        if (x) en->pos_x = ctl_param_e(c, en, "x", en->pos_x) * cs;
+        if (y) en->pos_y = ctl_param_e(c, en, "y", en->pos_y) * cs;
     }
     else if (mg_str_ieq(t, "posadd")) {
         const char *x = ctl_param(c, "x"), *y = ctl_param(c, "y");
-        if (x) en->pos_x += ctl_param_e(c, en, "x", 0);
-        if (y) en->pos_y += ctl_param_e(c, en, "y", 0);
+        double cs = en->coord_scale > 0 ? en->coord_scale : 1.0;
+        if (x) en->pos_x += ctl_param_e(c, en, "x", 0) * cs;
+        if (y) en->pos_y += ctl_param_e(c, en, "y", 0) * cs;
     }
     else if (mg_str_ieq(t, "ctrlset")) {
         en->ctrl = ctl_param_i(c, en, "value", en->ctrl);

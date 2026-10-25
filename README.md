@@ -11,16 +11,44 @@ directly on Android via SDL2.
 - Gradle-free build (ndk-build + aapt2/d8/apksigner), fully scriptable
 - LAN / Wi-Fi-hotspot netplay scaffolded (`engine/net.c`, experimental)
 
-Current release: **v0.1.1** (`releases/MUGEN-v0.1.1.apk`, ~4.7 MB) — playable fight MVP.
+Current release: **v0.2.0** (`releases/MUGEN-v0.2.0.apk`, ~4.7 MB) — playable fight MVP + custom data folders.
 
-v0.1.1 fixes the black-screen-on-launch bug of v0.1.0 (game data was packaged outside `assets/`, so the engine found an empty data dir), forces landscape orientation, and adds a visible loading screen + error screen.
+**v0.2.0** fixes the broken fight scene of v0.1.x on real devices (characters were
+tiny and piled in the top-left corner because `world_scale` was never initialized;
+stage backgrounds never rendered because `spriteno`/`start`/`spr` were not parsed),
+adds correct MUGEN localcoord handling so HD characters (e.g. Kung Fu Man 720) are
+scaled, positioned and hit like on PC, makes every virtual button press register
+as its own move (nearest-button hit-testing + no more duplicated touch/mouse
+events), and adds an **in-game data folder picker** — choose any folder on your
+device as the MUGEN data root.
+
+v0.1.2 fixed a path-join bug that showed "GAME DATA MISSING" on some devices.
+v0.1.1 fixed the black-screen-on-launch bug of v0.1.0 (game data was packaged
+outside `assets/`), forced landscape orientation, and added a visible loading
+screen + error screen.
 
 ## Install
 
-1. Download `releases/MUGEN-v0.1.1.apk`, copy to your phone, install (allow "unknown sources").
+1. Download `releases/MUGEN-v0.2.0.apk`, copy to your phone, install (allow "unknown sources").
 2. First launch extracts the bundled MUGEN data to
    `Android/data/com.mugen.android/files/mugen/`
+   and asks for storage access (used by the custom-folder picker).
 3. Play! Default roster: Kung Fu Man + Kung Fu Man 720 on the Training Room stage.
+
+## Choosing your own data folder (v0.2.0)
+
+On the title screen, tap the **DATA** button (top-right) to open the folder
+picker. Browse to any folder on your device (e.g. `Download/mugen`) and tap
+**USE THIS FOLDER**. The folder must be a full MUGEN data root — it has to
+contain `data/select.def`. Folders that qualify are tagged `MUGEN` in the list.
+
+- Characters go in `<folder>/chars/<name>/`, stages in `<folder>/stages/` —
+  exactly the PC MUGEN layout.
+- The choice is saved and re-used on the next launch.
+- **BUILT-IN DATA** switches back to the APK-bundled data at any time.
+- This means you can keep your custom roster on shared storage (or an SD card
+  path) without touching the app's private folder, and swap data sets instantly
+  without reinstalling.
 
 ## Controls (touch)
 
@@ -30,14 +58,17 @@ v0.1.1 fixes the black-screen-on-launch bug of v0.1.0 (game data was packaged ou
 
 ## Adding characters / stages (exactly like PC)
 
-1. Put the character folder into `mugen/chars/<charname>/`
+Either edit the extracted folder above, or (recommended) create your own folder
+via the **DATA** picker:
+
+1. Put the character folder into `<your folder>/chars/<charname>/`
    (must contain `<charname>.def`, `.sff`, `.air`, `.cmd`, `.cns`, `.snd`).
-2. Add a line to `mugen/data/select.def`:
+2. Add a line to `<your folder>/data/select.def`:
    ```
    <charname>, stages/<stagename>.def
    ```
-3. Put stages into `mugen/stages/` and list them under `[ExtraStages]`.
-4. Restart the app. Done — same workflow as the PC engine.
+3. Put stages into `<your folder>/stages/` — every `*.def` found there is loaded.
+4. Restart the app (or re-pick the folder). Done — same workflow as the PC engine.
 
 ## What's implemented (v0.1)
 

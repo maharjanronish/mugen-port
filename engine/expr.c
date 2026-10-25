@@ -367,7 +367,8 @@ static MgVal eval_trig(int trig, MgExpr *arg, MgExpr *arg2, MgEntity *en) {
         case TR_P2BODYDIST: {
             if (!p2) break;
             double d = fabs(p2->pos_x - en->pos_x);
-            double fw = mg_char_const(en->ch, "size.ground.front", 16) + mg_char_const(p2->ch, "size.ground.front", 16);
+            double fw = mg_char_const(en->ch, "size.ground.front", 16) * (en->coord_scale > 0 ? en->coord_scale : 1.0)
+                      + mg_char_const(p2->ch, "size.ground.front", 16) * (p2->coord_scale > 0 ? p2->coord_scale : 1.0);
             v.is_float = 1; v.f = d - fw;
             break;
         }

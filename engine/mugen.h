@@ -291,6 +291,11 @@ typedef struct {
     int ai_timer, ai_action;
     int angle;
     int drawpal_time;
+    /* localcoord conversion: char-local units -> stage/world units.
+     * set at fight start = world_h / ch->localcoord_h (1.0 for 320x240 chars
+     * on a 320x240 stage; 1/3 for a 1280x720 char). All CNS-derived lengths
+     * and velocities pass through this so HD chars play correctly. */
+    double coord_scale;
     /* input */
     uint32_t buttons, buttons_prev;
     /* command buffer */

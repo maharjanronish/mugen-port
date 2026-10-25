@@ -1,6 +1,9 @@
 package com.mugen.android;
 
 import org.libsdl.app.SDLActivity;
+import android.Manifest;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 import java.io.File;
@@ -27,6 +30,26 @@ public class MainActivity extends SDLActivity {
         // must never race the extraction). Runs once; ~2s for 6 MB.
         extractGameData();
         super.onCreate(savedInstanceState);
+        // The in-game folder picker browses /storage/emulated/0 so users can
+        // load custom characters from any folder they choose. On legacy-storage
+        // targets (targetSdk 28) that needs a runtime READ grant.
+        requestStoragePermission();
+    }
+
+    private void requestStoragePermission() {
+        try {
+            if (Build.VERSION.SDK_INT >= 23) {
+                if (checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE)
+                        != PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(new String[]{
+                            Manifest.permission.READ_EXTERNAL_STORAGE,
+                            Manifest.permission.WRITE_EXTERNAL_STORAGE
+                    }, 1001);
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "storage permission request failed", e);
+        }
     }
 
     @Override

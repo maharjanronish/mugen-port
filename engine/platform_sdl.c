@@ -4,6 +4,8 @@
 #include "mugen.h"
 #include <SDL.h>
 #include <stdarg.h>
+#include <dirent.h>
+#include <sys/stat.h>
 
 #ifdef __ANDROID__
 /* Engine diagnostics -> logcat (tag "SDL/APP"). Bionic apps have no usable
@@ -17,6 +19,8 @@ void mg_logf(const char *fmt, ...) {
     SDL_Log("%s", buf);
 }
 #endif
+
+#define MG_PORT_VERSION "0.2.0"
 
 static SDL_Window *g_win = NULL;
 static SDL_Renderer *g_ren = NULL;
@@ -149,6 +153,14 @@ static void fatal_error_loop(const char *line1, const char *line2, const char *l
 typedef struct { MgSprite *spr; SDL_Texture *tex; } TexCache;
 static TexCache g_texcache[TEXCACHE_MAX];
 static int g_ntexcache = 0;
+
+/* drop every cached texture (called when the engine re-inits with a new
+ * game data folder — old MgSprite pointers become unreachable) */
+static void reset_texcache(void) {
+    for (int i = 0; i < g_ntexcache; i++)
+        if (g_texcache[i].tex) SDL_DestroyTexture(g_texcache[i].tex);
+    g_ntexcache = 0;
+}
 
 static SDL_Texture *spr_texture(MgSprite *spr) {
     for (int i = 0; i < g_ntexcache; i++)
@@ -334,70 +346,110 @@ static TouchBtn g_touchbtns[] = {
     { 640, 680, 40, BTN_START, "ST" },
 };
 
-/* finger -> button binding for multitouch (slots free when btn_idx < 0) */
+/* finger -> button binding for multitouch (slots free when btn_idx < 0).
+ * fid MOUSE_SLOT marks the single hardware-mouse pointer (a real mouse, not
+ * a synthesized touch-mouse event — those are disabled via hint). */
+#define MOUSE_SLOT ((SDL_FingerID)-2)
 typedef struct { SDL_FingerID fid; int btn_idx; } FingerSlot;
 static FingerSlot g_fingers[16];
 
-static void handle_touch(SDL_Event *e) {
-    int x = 0, y = 0;
+static int touch_xy(SDL_Event *e, int *x, int *y) {
     if (e->type == SDL_FINGERDOWN || e->type == SDL_FINGERMOTION || e->type == SDL_FINGERUP) {
         int ww, wh;
         SDL_GetWindowSize(g_win, &ww, &wh);
-        x = (int)(e->tfinger.x * ww);
-        y = (int)(e->tfinger.y * wh);
-    } else if (e->type == SDL_MOUSEBUTTONDOWN || e->type == SDL_MOUSEBUTTONUP) {
-        x = e->button.x; y = e->button.y;
-    } else return;
-
-    /* map window pixels -> 1280x720 logical coords (letterboxed by SDL).
-     * The old code used raw window pixels, so buttons landed in the wrong
-     * place on every real device (window is never exactly 1280x720). */
-    int lx = x, ly = y;
-    {
-        float lgx = 0.0f, lgy = 0.0f;
-        SDL_RenderWindowToLogical(g_ren, (float)x, (float)y, &lgx, &lgy);
-        lx = (int)lgx; ly = (int)lgy;
+        float gx, gy;
+        /* window pixels -> 1280x720 logical coords (letterboxed by SDL).
+         * The old code used raw window pixels, so buttons landed in the wrong
+         * place on every real device (window is never exactly 1280x720). */
+        SDL_RenderWindowToLogical(g_ren, e->tfinger.x * ww, e->tfinger.y * wh, &gx, &gy);
+        *x = (int)gx; *y = (int)gy;
+        return 1;
     }
+    if (e->type == SDL_MOUSEBUTTONDOWN || e->type == SDL_MOUSEBUTTONUP) {
+        float gx, gy;
+        SDL_RenderWindowToLogical(g_ren, (float)e->button.x, (float)e->button.y, &gx, &gy);
+        *x = (int)gx; *y = (int)gy;
+        return 1;
+    }
+    return 0;
+}
+
+/* NEAREST button wins. v0.1.x used first-match with an inflated radius
+ * (r*sqrt(2)), and adjacent 52px buttons sit 90px apart — the circles
+ * overlapped massively, so B/C/Y/Z presses usually landed on A/X and every
+ * button "did the same move". With nearest-wins each tap maps to exactly one
+ * button deterministically. */
+static int pick_button(int x, int y) {
+    int best = -1;
+    long best_d2 = 0;
+    for (int i = 0; i < (int)(sizeof(g_touchbtns)/sizeof(g_touchbtns[0])); i++) {
+        TouchBtn *b = &g_touchbtns[i];
+        int dx = x - b->x, dy = y - b->y;
+        long d2 = (long)dx*dx + (long)dy*dy;
+        long lim = (long)b->r * b->r + (long)b->r * 24;   /* r * ~1.21 */
+        if (d2 <= lim && (best < 0 || d2 < best_d2)) { best = i; best_d2 = d2; }
+    }
+    return best;
+}
+
+static void handle_touch(SDL_Event *e) {
+    int x, y;
+    if (!touch_xy(e, &x, &y)) return;
 
     if (e->type == SDL_FINGERDOWN || e->type == SDL_MOUSEBUTTONDOWN) {
-        for (int i = 0; i < (int)(sizeof(g_touchbtns)/sizeof(g_touchbtns[0])); i++) {
-            TouchBtn *b = &g_touchbtns[i];
-            int dx = lx - b->x, dy = ly - b->y;
-            if (dx*dx + dy*dy <= b->r * b->r * 2) {
-                g_touchbuttons |= b->bit;
-                for (int f = 0; f < 16; f++)
-                    if (g_fingers[f].btn_idx < 0) {
-                        g_fingers[f].fid = e->tfinger.fingerId;
-                        g_fingers[f].btn_idx = i;
-                        break;
-                    }
-                return;
-            }
+        /* title-screen DATA button opens the folder picker */
+        extern void mg_picker_open(void);
+        extern int mg_picker_active(void);
+        if (!mg_picker_active() && g_game.game_phase == 0) {
+            int dx = x - 1210, dy = y - 46;
+            if ((long)dx*dx + (long)dy*dy <= 52L*52L) { mg_picker_open(); return; }
+        }
+        int hit = pick_button(x, y);
+        if (hit >= 0) {
+            g_touchbuttons |= g_touchbtns[hit].bit;
+            for (int f = 0; f < 16; f++)
+                if (g_fingers[f].btn_idx < 0) {
+                    g_fingers[f].fid = (e->type == SDL_MOUSEBUTTONDOWN) ? MOUSE_SLOT : e->tfinger.fingerId;
+                    g_fingers[f].btn_idx = hit;
+                    break;
+                }
         }
     } else if (e->type == SDL_FINGERUP || e->type == SDL_MOUSEBUTTONUP) {
-        SDL_FingerID fid = (e->type == SDL_FINGERUP) ? e->tfinger.fingerId : 1;
+        SDL_FingerID fid = (e->type == SDL_FINGERUP) ? e->tfinger.fingerId : MOUSE_SLOT;
         for (int f = 0; f < 16; f++) {
-            if (g_fingers[f].btn_idx >= 0 &&
-                (e->type == SDL_MOUSEBUTTONUP || g_fingers[f].fid == fid)) {
+            if (g_fingers[f].btn_idx >= 0 && g_fingers[f].fid == fid) {
                 g_touchbuttons &= ~g_touchbtns[g_fingers[f].btn_idx].bit;
                 g_fingers[f].btn_idx = -1;
                 g_fingers[f].fid = 0;
-                if (e->type == SDL_FINGERUP) return;
             }
         }
+    }
+}
+
+static void draw_circle(int cx, int cy, int r, uint8_t cr, uint8_t cg, uint8_t cb, uint8_t ca) {
+    for (int dy = -r; dy <= r; dy++) {
+        int half = (int)(sqrt((double)(r*r - dy*dy)) + 0.5);
+        if (half <= 0) half = 1;
+        mg_fill_rect(cx - half, cy + dy, half * 2, 1, cr, cg, cb, ca);
     }
 }
 
 static void draw_touch_controls(void) {
     for (int i = 0; i < (int)(sizeof(g_touchbtns)/sizeof(g_touchbtns[0])); i++) {
         TouchBtn *b = &g_touchbtns[i];
-        uint8_t a = (g_touchbuttons & b->bit) ? 160 : 90;
-        mg_fill_rect(b->x - b->r, b->y - b->r, b->r*2, b->r*2, 200, 200, 220, a);
+        uint8_t a = (g_touchbuttons & b->bit) ? 170 : 90;
+        draw_circle(b->x, b->y, b->r, 200, 200, 220, a);
+        draw_circle(b->x, b->y, b->r - 4, 60, 60, 90, a);
+        /* label: game font if loaded, builtin 5x7 otherwise */
+        int drawn = 0;
         if (g_game.fonts[0]) {
             int tw = strlen(b->label) * (g_game.fonts[0]->size_w + 1) * 3;
             int th = g_game.fonts[0]->size_h * 3;
-            mg_render_text(g_game.fonts[0], b->label, b->x - tw/2, b->y - th/2, 3, 0x202030);
+            mg_render_text(g_game.fonts[0], b->label, b->x - tw/2, b->y - th/2, 3, 0xE0E0F0);
+            drawn = 1;
         }
+        if (!drawn)
+            draw_builtin_text(b->label, b->x - 2*strlen(b->label)*2, b->y - 3, 2, 0xE0E0F0);
     }
 }
 
@@ -418,12 +470,255 @@ int mg_platform_menu_action(int player, int *delta, int *confirm, int *back) {
     return 1;
 }
 
+/* ---------------- game data folder picker ----------------
+ * Lets the user point the engine at ANY folder on the device that holds a
+ * full MUGEN tree (must contain data/select.def; characters go in chars/).
+ * The choice is persisted to <internal>/game_dir.txt and re-used on the
+ * next launch. Opened from the DATA button on the title screen. */
+static char g_builtin_dir[512] = "";   /* APK-extracted bundled data */
+static char g_active_dir[512] = "";    /* what the engine runs on now */
+static int  g_picker_on = 0;
+static char g_pick_path[512] = "";
+static char g_pick_items[192][64];     /* [0] is always ".." (parent) */
+static char g_pick_ok[192];            /* looks like a MUGEN root? */
+static int  g_pick_n = 0;
+static int  g_pick_scroll = 0;
+static char g_pick_msg[96] = "";
+static int  g_pick_msg_timer = 0;
+
+#define PICK_ROWS 8
+#define PICK_ROW_Y 110
+#define PICK_ROW_H 46
+
+static const char *storage_root(void) {
+#ifdef __ANDROID__
+    return "/storage/emulated/0";
+#else
+    const char *h = getenv("HOME");
+    return (h && h[0]) ? h : "/";
+#endif
+}
+
+static void picker_msg(const char *s) {
+    snprintf(g_pick_msg, sizeof(g_pick_msg), "%s", s);
+    g_pick_msg_timer = 300;
+}
+
+static void settings_path(char *out, int cap) {
+#ifdef __ANDROID__
+    const char *base = SDL_AndroidGetInternalStoragePath();
+    snprintf(out, cap, "%s/game_dir.txt", base ? base : ".");
+#else
+    const char *h = getenv("HOME");
+    snprintf(out, cap, "%s/.mugen_android_gamedir", (h && h[0]) ? h : ".");
+#endif
+}
+
+/* a valid data folder must contain data/select.def */
+static int is_mugen_dir(const char *dir) {
+    char p[600];
+    snprintf(p, sizeof(p), "%s/data/select.def", dir);
+    mg_path_fix(p);
+    return mg_file_exists(p);
+}
+
+static int cmp_names(const void *a, const void *b) {
+    return strcmp((const char *)a, (const char *)b);
+}
+
+static void picker_scan(void) {
+    g_pick_n = 1;
+    strcpy(g_pick_items[0], "..");
+    g_pick_ok[0] = 0;
+    g_pick_scroll = 0;
+    const char *dir = g_pick_path[0] ? g_pick_path : "/";
+    DIR *d = opendir(dir);
+    if (!d) {
+        picker_msg("CANNOT READ FOLDER - GRANT STORAGE PERMISSION");
+        return;
+    }
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL && g_pick_n < 192) {
+        const char *nm = de->d_name;
+        if (!nm[0] || nm[0] == '.') continue;
+        if (strlen(nm) >= 60) continue;
+        int isdir = 0;
+        if (de->d_type == DT_DIR) isdir = 1;
+        else if (de->d_type == DT_UNKNOWN) {
+            char fp[700]; struct stat st;
+            snprintf(fp, sizeof(fp), "%s/%s", dir, nm);
+            isdir = (stat(fp, &st) == 0 && S_ISDIR(st.st_mode));
+        }
+        if (!isdir) continue;
+        snprintf(g_pick_items[g_pick_n], 64, "%s", nm);
+        char probe[760];
+        snprintf(probe, sizeof(probe), "%s/%s/data/select.def", dir, nm);
+        mg_path_fix(probe);
+        g_pick_ok[g_pick_n] = mg_file_exists(probe) ? 1 : 0;
+        g_pick_n++;
+    }
+    closedir(d);
+    if (g_pick_n > 2) qsort(g_pick_items + 1, (size_t)(g_pick_n - 1), 64, cmp_names);
+    if (g_pick_n == 1) picker_msg("NO SUBFOLDERS HERE");
+    else g_pick_msg[0] = 0;
+}
+
+int mg_picker_active(void) { return g_picker_on; }
+
+void mg_picker_open(void) {
+    snprintf(g_pick_path, sizeof(g_pick_path), "%s", storage_root());
+    picker_scan();
+    g_pick_msg_timer = 0;
+    g_picker_on = 1;
+    /* release every held button so nothing leaks into the game */
+    g_touchbuttons = 0;
+    for (int f = 0; f < 16; f++) { g_fingers[f].btn_idx = -1; g_fingers[f].fid = 0; }
+}
+
+/* switch the live engine to another data folder */
+static void picker_apply_dir(const char *dir) {
+    char sp[600];
+    settings_path(sp, sizeof(sp));
+    FILE *f = fopen(sp, "w");
+    if (f) { fprintf(f, "%s\n", dir); fclose(f); }
+    reset_texcache();
+    mg_stop_channel(0);
+    SDL_Log("[picker] switching game dir to: %s", dir);
+    Uint32 t0 = SDL_GetTicks();
+    mg_engine_init(dir);
+    SDL_Log("[picker] re-init done in %dms: %d chars, %d stages",
+            (int)(SDL_GetTicks() - t0), g_game.nchars, g_game.nstages);
+    snprintf(g_active_dir, sizeof(g_active_dir), "%s", dir);
+    g_picker_on = 0;
+    g_touchbuttons = 0;
+    if (g_game.nchars == 0 || g_game.nstages == 0) {
+        char l3[300];
+        snprintf(l3, sizeof(l3), "DIR: %s", dir);
+        fatal_error_loop("GAME DATA MISSING", "PICK ANOTHER FOLDER", l3);
+    }
+}
+
+static int pt_in(int x, int y, int rx, int ry, int rw, int rh) {
+    return x >= rx && x < rx + rw && y >= ry && y < ry + rh;
+}
+
+static void picker_handle_tap(int x, int y) {
+    /* folder rows */
+    for (int r = 0; r < PICK_ROWS; r++) {
+        int idx = g_pick_scroll + r;
+        if (idx >= g_pick_n) break;
+        if (pt_in(x, y, 60, PICK_ROW_Y + r * PICK_ROW_H, 1160, PICK_ROW_H - 6)) {
+            if (idx == 0) {
+                /* parent (stop at filesystem root) */
+                char *slash = strrchr(g_pick_path, '/');
+                if (slash && slash != g_pick_path) *slash = 0;
+                else snprintf(g_pick_path, sizeof(g_pick_path), "%s", "/");
+                picker_scan();
+            } else {
+                char next[600];
+                const char *sep = (g_pick_path[strlen(g_pick_path)-1] == '/') ? "" : "/";
+                snprintf(next, sizeof(next), "%s%s%s", g_pick_path, sep, g_pick_items[idx]);
+                if (opendir(next)) {
+                    snprintf(g_pick_path, sizeof(g_pick_path), "%s", next);
+                    picker_scan();
+                } else picker_msg("CANNOT OPEN FOLDER");
+            }
+            return;
+        }
+    }
+    /* page nav */
+    if (pt_in(x, y, 80, 520, 220, 60)) {
+        g_pick_scroll -= PICK_ROWS;
+        if (g_pick_scroll < 0) g_pick_scroll = 0;
+        return;
+    }
+    if (pt_in(x, y, 340, 520, 220, 60)) {
+        if (g_pick_scroll + PICK_ROWS < g_pick_n) g_pick_scroll += PICK_ROWS;
+        return;
+    }
+    /* actions */
+    if (pt_in(x, y, 60, 600, 360, 60)) {          /* USE THIS FOLDER */
+        if (is_mugen_dir(g_pick_path)) {
+            picker_msg("LOADING...");
+            picker_apply_dir(g_pick_path);
+        } else {
+            picker_msg("FOLDER MUST CONTAIN data/select.def");
+        }
+        return;
+    }
+    if (pt_in(x, y, 450, 600, 360, 60)) {         /* BUILT-IN DATA */
+        char sp[600];
+        settings_path(sp, sizeof(sp));
+        remove(sp);
+        picker_apply_dir(g_builtin_dir[0] ? g_builtin_dir : ".");
+        return;
+    }
+    if (pt_in(x, y, 840, 600, 380, 60)) {         /* CANCEL */
+        g_picker_on = 0;
+        return;
+    }
+}
+
+static void draw_pick_btn(const char *label, int rx, int ry, int rw, int rh, uint32_t rgb) {
+    mg_fill_rect(rx, ry, rw, rh, (rgb>>16)&0xFF, (rgb>>8)&0xFF, rgb&0xFF, 235);
+    int tw = builtin_text_w(label, 3);
+    draw_builtin_text(label, rx + rw/2 - tw/2, ry + rh/2 - 11, 3, 0xFFFFFF);
+}
+
+static void mg_picker_draw(void) {
+    /* dim the game behind */
+    mg_fill_rect(0, 0, g_fbw, g_fbh, 0, 0, 0, 200);
+    draw_builtin_text_centered("CHOOSE MUGEN DATA FOLDER", 24, 4, 0xFFB040);
+    /* current path (tail if too long) */
+    const char *p = g_pick_path;
+    while (builtin_text_w(p, 2) > 1240 && p[0]) p++;
+    draw_builtin_text_centered(p, 62, 2, 0xA0D0FF);
+    if (g_pick_path[0] && is_mugen_dir(g_pick_path))
+        draw_builtin_text_centered("(THIS FOLDER HAS MUGEN DATA)", 84, 2, 0x60FF80);
+    else
+        draw_builtin_text_centered("(PICK THE FOLDER THAT CONTAINS data/select.def)", 84, 2, 0x909090);
+
+    /* rows */
+    for (int r = 0; r < PICK_ROWS; r++) {
+        int idx = g_pick_scroll + r;
+        if (idx >= g_pick_n) break;
+        int ry = PICK_ROW_Y + r * PICK_ROW_H;
+        int cur = g_pick_ok[idx];
+        mg_fill_rect(60, ry, 1160, PICK_ROW_H - 6,
+                     cur ? 20 : 34, cur ? 60 : 40, cur ? 40 : 64, 235);
+        char buf[84];
+        snprintf(buf, sizeof(buf), "%s%s", idx == 0 ? "<UP> " : "[] ", g_pick_items[idx]);
+        draw_builtin_text(buf, 84, ry + 12, 3, cur ? 0x70FF90 : 0xE0E8FF);
+        if (cur) draw_builtin_text("MUGEN", 1100, ry + 12, 3, 0x70FF90);
+    }
+    /* scroll indicator */
+    char nav[64];
+    snprintf(nav, sizeof(nav), "%d-%d OF %d", g_pick_scroll + 1,
+             g_pick_scroll + PICK_ROWS < g_pick_n ? g_pick_scroll + PICK_ROWS : g_pick_n, g_pick_n);
+    draw_builtin_text_centered(nav, 500, 2, 0x808090);
+    draw_pick_btn("< PREV", 80, 520, 220, 60, 0x3850A0);
+    draw_pick_btn("NEXT >", 340, 520, 220, 60, 0x3850A0);
+    draw_pick_btn("USE THIS FOLDER", 60, 600, 360, 60, 0x207030);
+    draw_pick_btn("BUILT-IN DATA", 450, 600, 360, 60, 0x806020);
+    draw_pick_btn("CANCEL", 840, 600, 380, 60, 0x702020);
+    if (g_pick_msg_timer > 0 && g_pick_msg[0]) {
+        g_pick_msg_timer--;
+        if ((g_pick_msg_timer / 20) % 4 != 3)
+            draw_builtin_text_centered(g_pick_msg, 676, 2, 0xFF8060);
+    }
+}
+
 static void poll_events(void) {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_QUIT) g_game.running = 0;
         else if (e.type == SDL_APP_TERMINATING) g_game.running = 0;
         else if (e.type == SDL_KEYDOWN || e.type == SDL_KEYUP) {
+            if (g_picker_on && e.type == SDL_KEYDOWN &&
+                (e.key.keysym.sym == SDLK_ESCAPE || e.key.keysym.sym == SDLK_BACKSPACE)) {
+                g_picker_on = 0;
+                continue;
+            }
             uint32_t mask = 0;
             switch (e.key.keysym.sym) {
                 case SDLK_LEFT: mask = BTN_BACK; break;
@@ -443,8 +738,22 @@ static void poll_events(void) {
                 else g_keybuttons[0] &= ~mask;
             }
         }
-        else if (e.type == SDL_FINGERDOWN || e.type == SDL_FINGERUP) handle_touch(&e);
-        else if (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP) handle_touch(&e);
+        else if (e.type == SDL_FINGERDOWN || e.type == SDL_FINGERUP) {
+            if (g_picker_on) {
+                if (e.type == SDL_FINGERDOWN) {
+                    int x, y;
+                    if (touch_xy(&e, &x, &y)) picker_handle_tap(x, y);
+                }
+            } else handle_touch(&e);
+        }
+        else if (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP) {
+            if (g_picker_on) {
+                if (e.type == SDL_MOUSEBUTTONDOWN) {
+                    int x, y;
+                    if (touch_xy(&e, &x, &y)) picker_handle_tap(x, y);
+                }
+            } else handle_touch(&e);
+        }
         else if (e.type == SDL_APP_WILLENTERBACKGROUND || e.type == SDL_APP_DIDENTERBACKGROUND) {
             /* release held buttons so nothing sticks after resume */
             g_touchbuttons = 0;
@@ -462,7 +771,12 @@ static void poll_events(void) {
 
 int main(int argc, char *argv[]) {
     (void)argc; (void)argv;
-    SDL_Log("MUGEN Android port v0.1.2 starting");
+    SDL_Log("MUGEN Android port v%s starting", MG_PORT_VERSION);
+
+    /* Touches must NOT be duplicated as mouse events: v0.1.x processed both,
+     * and the synthesized MOUSEBUTTONUP released every held virtual button
+     * (it cleared all finger slots), breaking multitouch. */
+    SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
 
     /* Video is required; audio/joystick are best-effort (a failed audio
      * subsystem must not kill the game like it did before). */
@@ -513,8 +827,8 @@ int main(int argc, char *argv[]) {
     g_game.running = 1;
     present_loading_frame(0);
 
-    /* game dir: Android passes the extraction dir via argv[1] (see
-     * MainActivity.getArguments); fallback to SDL storage paths. */
+    /* game dir: priority = user-picked folder (settings file) > argv[1]
+     * extraction dir (MainActivity.getArguments) > SDL storage paths. */
     const char *gamedir = GAME_DIR_DEFAULT;
     char dirbuf[512] = {0};
 #ifdef __ANDROID__
@@ -528,6 +842,28 @@ int main(int argc, char *argv[]) {
         snprintf(dirbuf, sizeof(dirbuf), "%s", argv[1]);
     }
     if (dirbuf[0]) gamedir = dirbuf;
+    snprintf(g_builtin_dir, sizeof(g_builtin_dir), "%s", gamedir);
+
+    /* user-picked custom data folder overrides the bundled one */
+    {
+        char sp[600];
+        settings_path(sp, sizeof(sp));
+        FILE *sf = fopen(sp, "r");
+        if (sf) {
+            char custom[512] = {0};
+            if (fgets(custom, sizeof(custom), sf)) {
+                custom[strcspn(custom, "\r\n")] = 0;
+                if (custom[0] && is_mugen_dir(custom)) {
+                    gamedir = custom;
+                    SDL_Log("custom game dir (from settings): %s", custom);
+                } else if (custom[0]) {
+                    SDL_Log("custom game dir invalid, using built-in: %s", custom);
+                }
+            }
+            fclose(sf);
+        }
+    }
+    snprintf(g_active_dir, sizeof(g_active_dir), "%s", gamedir);
     SDL_Log("game dir: %s", gamedir);
 
     Uint32 load_t0 = SDL_GetTicks();
@@ -553,17 +889,30 @@ int main(int argc, char *argv[]) {
     int running = 1;
     while (running && g_game.running) {
         poll_events();
-        /* feed input to entities */
-        for (int i = 0; i < g_nentities; i++)
-            if (!g_entities[i].is_cpu)
-                g_entities[i].buttons = g_keybuttons[i & 1] | (i == 0 ? g_touchbuttons : 0);
+        /* feed input to entities (frozen while the folder picker is up) */
+        if (!g_picker_on)
+            for (int i = 0; i < g_nentities; i++)
+                if (!g_entities[i].is_cpu)
+                    g_entities[i].buttons = g_keybuttons[i & 1] | (i == 0 ? g_touchbuttons : 0);
         /* engine tick */
         mg_engine_frame();
         /* render */
         SDL_SetRenderDrawColor(g_ren, 0, 0, 0, 255);
         SDL_RenderClear(g_ren);
         mg_engine_render();
-        draw_touch_controls();
+        if (g_picker_on) {
+            mg_picker_draw();
+        } else {
+            if (g_game.game_phase == 0) {
+                /* title screen: DATA folder button + active folder hint */
+                draw_circle(1210, 46, 48, 40, 56, 96, 220);
+                draw_builtin_text("DATA", 1210 - builtin_text_w("DATA", 3)/2, 46 - 10, 3, 0xFFE080);
+                const char *d = g_active_dir;
+                while (builtin_text_w(d, 1) > 1200 && d[0]) d++;
+                draw_builtin_text_centered(d, 700, 1, 0x707080);
+            }
+            draw_touch_controls();
+        }
         SDL_RenderPresent(g_ren);
         /* frame pace */
         next_tick += 1000 / 60;

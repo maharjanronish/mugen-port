@@ -96,15 +96,22 @@ MgStage *mg_stage_load(const char *defpath) {
             else if (mg_str_ieq(nm, "zoffsetlink")) st->zoffsetlink = mg_geti(it.value, 0);
             else if (mg_str_ieq(nm, "autoturn")) st->autoscroll = mg_geti(it.value, 1);
         }
-        else if (mg_str_ieq(cursec, "files")) {
-            if (mg_str_ieq(nm, "sprite")) strncpy(sfffile, it.value, 255);
+        else if (mg_str_ieq(cursec, "files") || mg_str_ieq(cursec, "bgdef")) {
+            /* stage defs put the sprite file directly under [BGdef] as
+             * "spr = ..." (classic) or under [Files] as "sprite = ..." */
+            if (mg_str_ieq(nm, "spr") || mg_str_ieq(nm, "sprite"))
+                strncpy(sfffile, it.value, 255);
         }
         else if (cur && strncmp(cursec, "bg ", 3) == 0) {
-            if (mg_str_ieq(nm, "spr")) {
+            if (mg_str_ieq(nm, "spriteno") || mg_str_ieq(nm, "spr")) {
                 int v[2] = {0,0};
                 mg_parse_ints(it.value, v, 2);
                 if (v[0] == -1) { cur->visible = 0; }
                 cur->spr_group = v[0]; cur->spr_number = v[1];
+            }
+            else if (mg_str_ieq(nm, "start")) {
+                int v[2] = {0,0}; mg_parse_ints(it.value, v, 2);
+                cur->x = v[0]; cur->y = v[1];
             }
             else if (mg_str_ieq(nm, "x")) cur->x = mg_geti(it.value, 0);
             else if (mg_str_ieq(nm, "y")) cur->y = mg_geti(it.value, 0);
